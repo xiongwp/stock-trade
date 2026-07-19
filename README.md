@@ -37,7 +37,20 @@
 
 > 若双击提示「无法打开（未验证的开发者）」，右键点该文件 → 打开 → 打开；或在终端 `bash 安装.command`。
 
-**方式二：命令行**
+**方式二：图形安装包 `.pkg`（像装普通 Mac 软件）**
+
+```bash
+./scripts/build-pkg.sh          # 生成 dist/StockTrade-<版本>.pkg（universal 二进制）
+```
+双击 `dist/StockTrade-*.pkg`，一路「继续」即可。它会把程序装到 `/usr/local/stocktrade/`、
+数据放到 `~/Library/Application Support/StockTrade/`（config.json、stock-trade.db），并设为开机自启。
+
+- **版本升级**：改 `VERSION` 里的版本号 → 重新 `build-pkg.sh` → 双击新 `.pkg` 即自动升级（同一包标识）。
+- **数据兼容**：升级只替换程序、不动数据目录；表结构变更由程序启动时自动迁移。首次从旧安装切换时，
+  会自动把旧的 `stock-trade.db` / `config.json` 迁移到数据目录，历史记录不丢。
+- 未签名，首次双击若被拦：右键该 `.pkg` → 打开。
+
+**方式三：命令行**
 ```bash
 go run .                            # 前台运行
 # 或开机自启：
