@@ -300,6 +300,16 @@ func sellPosition(db *sql.DB, id int64, sellPrice float64, sellTime string) erro
 	return err
 }
 
+// updatePosition 全字段更新一条记录（用于记录管理里的编辑）。盈亏由查询实时派生，改后自动同步。
+func updatePosition(db *sql.DB, p Position) error {
+	_, err := db.Exec(
+		`UPDATE positions SET symbol = ?, quantity = ?, buy_price = ?, buy_time = ?,
+		 sell_price = ?, sell_time = ?, note = ? WHERE id = ?`,
+		p.Symbol, p.Quantity, p.BuyPrice, p.BuyTime, p.SellPrice, p.SellTime, p.Note, p.ID,
+	)
+	return err
+}
+
 func deletePosition(db *sql.DB, id int64) error {
 	_, err := db.Exec(`DELETE FROM positions WHERE id = ?`, id)
 	return err

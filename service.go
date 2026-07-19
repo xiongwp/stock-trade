@@ -19,10 +19,107 @@ type Service struct {
 	mu       sync.Mutex
 	assets   []Asset   // 全部可交易资产的内存缓存（用于检索）
 	assetsAt time.Time // 缓存时间
+
+	barCache map[string]barCacheEntry // 按 symbol|tf 缓存分钟/小时/周线（日线走数据库）
+}
+
+type barCacheEntry struct {
+	bars []BarRow
+	at   time.Time
 }
 
 func newService(db *sql.DB, ap *Alpaca) *Service {
-	return &Service{db: db, ap: ap}
+	return &Service{db: db, ap: ap, barCache: map[string]barCacheEntry{}}
+}
+
+// 支持的 K 线周期 → Alpaca timeframe 及回溯窗口。
+var timeframes = map[string]struct {
+	alpaca   string
+	lookback time.Duration
+}{
+	"1Min":  {"1Min", 5 * 24 * time.Hour},
+	"5Min":  {"5Min", 20 * 24 * time.Hour},
+	"15Min": {"15Min", 40 * 24 * time.Hour},
+	"30Min": {"30Min", 60 * 24 * time.Hour},
+	"1Hour": {"1Hour", 120 * 24 * time.Hour},
+	"1Day":  {"1Day", 365 * 24 * time.Hour},
+	"1Week": {"1Week", 3 * 365 * 24 * time.Hour},
+}
+
+// Bars 返回某只股票指定周期的 K 线：日线走本地库，其它周期实时拉取并缓存 60 秒。
+func (s *Service) Bars(symbol, tf string) ([]BarRow, error) {
+	if _, ok := timeframes[tf]; !ok {
+		tf = "1Day"
+	}
+	if tf == "1Day" {
+		bars, err := getBars(s.db, symbol)
+		if err != nil {
+			return nil, err
+		}
+		if len(bars) == 0 {
+			if err := s.ensureBars(symbol); err == nil {
+				bars, _ = getBars(s.db, symbol)
+			}
+		}
+		return bars, nil
+	}
+
+	key := symbol + "|" + tf
+	s.mu.Lock()
+	if e, ok := s.barCache[key]; ok && time.Since(e.at) < 60*time.Second {
+		s.mu.Unlock()
+		return e.bars, nil
+	}
+	s.mu.Unlock()
+
+	spec := timeframes[tf]
+	end := time.Now()
+	start := end.Add(-spec.lookback)
+	raw, err := s.ap.GetBars(symbol, spec.alpaca, start, end)
+	if err != nil {
+		return nil, err
+	}
+	bars := make([]BarRow, len(raw))
+	for i, b := range raw {
+		bars[i] = BarRow{Time: b.T.Unix(), O: b.O, H: b.H, L: b.L, C: b.C, V: b.V}
+	}
+	s.mu.Lock()
+	s.barCache[key] = barCacheEntry{bars: bars, at: time.Now()}
+	s.mu.Unlock()
+	return bars, nil
+}
+
+// SignalPoint 是策略在某时间点的买/卖信号。
+type SignalPoint struct {
+	Time int64 `json:"time"` // unix 秒
+	Side int   `json:"side"` // +1 买 / -1 卖
+}
+
+// Signals 用指定策略在指定周期的 K 线上算出所有买卖点，供图表标注。
+func (s *Service) Signals(symbol, stratKey, tf string) ([]SignalPoint, error) {
+	var strat Strategy
+	found := false
+	for _, st := range strategies() {
+		if st.Key == stratKey {
+			strat, found = st, true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("未知策略: %s", stratKey)
+	}
+	bars, err := s.Bars(symbol, tf)
+	if err != nil {
+		return nil, err
+	}
+	sig := strat.Signals(bars)
+	out := []SignalPoint{}
+	for i := range bars {
+		if sig[i] != 0 {
+			out = append(out, SignalPoint{Time: bars[i].Time, Side: sig[i]})
+		}
+	}
+	return out, nil
 }
 
 // assetsCache 返回可交易资产列表，缓存 12 小时。

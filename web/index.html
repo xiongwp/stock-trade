@@ -10,17 +10,22 @@
 <body>
   <header class="topbar">
     <h1>📈 股票交易终端</h1>
-    <div class="totals" id="totals">
-      <span class="totals-label">浮动盈亏</span>
+    <nav class="nav">
+      <button class="nav-tab active" data-view="trade">交易</button>
+      <button class="nav-tab" data-view="returns">收益</button>
+      <button class="nav-tab" data-view="records">记录</button>
+    </nav>
+    <div class="totals">
+      <span class="totals-label">浮动</span>
       <span class="totals-value flat" id="totalPnl">$0.00</span>
-      <span class="totals-label" style="margin-left:16px">已实现</span>
+      <span class="totals-label" style="margin-left:14px">已实现</span>
       <span class="totals-value flat" id="totalRealized">$0.00</span>
     </div>
-    <button id="refreshBtn" class="btn ghost" title="立即刷新报价与策略">刷新</button>
+    <button id="refreshBtn" class="btn ghost" title="立即刷新">刷新</button>
   </header>
 
-  <div class="layout">
-    <!-- 左：检索 + 自选列表 -->
+  <!-- ===================== 交易视图 ===================== -->
+  <div id="view-trade" class="view layout">
     <aside class="sidebar">
       <div class="search-box">
         <input id="searchInput" placeholder="检索代码/名称，如 AAPL、苹果" autocomplete="off">
@@ -30,7 +35,6 @@
       <p id="watchEmpty" class="hint">检索并添加股票开始跟踪</p>
     </aside>
 
-    <!-- 中：图表 + 持仓 -->
     <main class="main">
       <div class="chart-head">
         <div>
@@ -42,6 +46,18 @@
           <span class="chart-change flat" id="chartChange"></span>
         </div>
       </div>
+
+      <div class="tf-bar" id="tfBar">
+        <button class="tf" data-tf="1Min">1分</button>
+        <button class="tf" data-tf="5Min">5分</button>
+        <button class="tf" data-tf="15Min">15分</button>
+        <button class="tf" data-tf="30Min">30分</button>
+        <button class="tf" data-tf="1Hour">1时</button>
+        <button class="tf active" data-tf="1Day">日线</button>
+        <button class="tf" data-tf="1Week">周线</button>
+        <span class="tf-legend" id="markerLegend" hidden>▲ 买点　▼ 卖点</span>
+      </div>
+
       <div class="chart-legend">
         <span class="lg-candle">K线（红涨绿跌）</span>
         <span class="lg-ma5">MA5</span>
@@ -72,48 +88,85 @@
         </table>
         <p id="posEmpty" class="hint" hidden>该股票还没有买入记录</p>
       </section>
-
-      <section class="stats">
-        <div class="pos-head">
-          <h2>已实现盈亏统计</h2>
-          <div class="stats-tabs">
-            <button class="tab active" data-period="monthly">按月</button>
-            <button class="tab" data-period="weekly">按周</button>
-          </div>
-        </div>
-        <table class="pos-table">
-          <thead>
-            <tr><th>周期</th><th class="num">已实现盈亏 $</th><th class="num">卖出笔数</th>
-                <th class="num">盈利笔数</th><th class="num">胜率</th></tr>
-          </thead>
-          <tbody id="statRows"></tbody>
-        </table>
-        <p id="statEmpty" class="hint">还没有卖出记录。卖出持仓后，这里按卖出时间统计每周/每月的已实现盈亏。</p>
-      </section>
-
-      <section class="strategies">
-        <div class="pos-head">
-          <h2>策略胜率排行</h2>
-          <span class="hint">近 1 年回测（全部自选股聚合）· 当前信号针对 <b id="stratSymbol">—</b></span>
-        </div>
-        <table class="strat-table">
-          <thead>
-            <tr><th>#</th><th>策略</th><th class="num">胜率</th><th class="num">交易数</th>
-                <th class="num">每笔均收</th><th class="num">累计收益</th><th>当前信号</th></tr>
-          </thead>
-          <tbody id="stratRows"></tbody>
-        </table>
-        <p class="hint">胜率来自历史回测，不含手续费/滑点，非投资建议，仅供参考。</p>
-      </section>
     </main>
 
-    <!-- 右：策略提醒 -->
-    <aside class="alerts">
-      <h2>策略提醒</h2>
-      <p class="hint">MA5/MA20 金叉死叉 · RSI 超买超卖</p>
-      <ul id="alertList" class="alert-list"></ul>
-      <p id="alertEmpty" class="hint">暂无提醒</p>
+    <aside class="right">
+      <section class="strat-panel">
+        <h2>策略列表</h2>
+        <p class="hint">近 1 年回测胜率排名 · 点击在图上标出买卖点</p>
+        <ul id="stratList" class="strat-list"></ul>
+      </section>
+      <section class="alerts">
+        <h2>策略提醒</h2>
+        <p class="hint">≥3 策略共振时提醒</p>
+        <ul id="alertList" class="alert-list"></ul>
+        <p id="alertEmpty" class="hint">暂无提醒</p>
+      </section>
     </aside>
+  </div>
+
+  <!-- ===================== 收益视图 ===================== -->
+  <div id="view-returns" class="view scroll-view" hidden>
+    <div class="returns-wrap">
+      <div class="cards">
+        <div class="card"><div class="card-label">浮动盈亏</div><div class="card-value flat" id="rCardUnrl">$0.00</div></div>
+        <div class="card"><div class="card-label">已实现盈亏</div><div class="card-value flat" id="rCardReal">$0.00</div></div>
+        <div class="card"><div class="card-label">合计盈亏</div><div class="card-value flat" id="rCardTotal">$0.00</div></div>
+        <div class="card"><div class="card-label">持仓市值</div><div class="card-value" id="rCardMV">$0.00</div></div>
+      </div>
+
+      <section>
+        <h2>各股票收益</h2>
+        <table class="data-table">
+          <thead>
+            <tr><th>代码</th><th class="num">持仓</th><th class="num">均价</th><th class="num">现价</th>
+                <th class="num">浮动盈亏</th><th class="num">已实现</th><th class="num">合计</th></tr>
+          </thead>
+          <tbody id="returnsRows"></tbody>
+        </table>
+        <p id="returnsEmpty" class="hint" hidden>还没有任何买入记录</p>
+      </section>
+
+      <div class="two-col">
+        <section>
+          <h2>每月收益</h2>
+          <table class="data-table">
+            <thead><tr><th>月份</th><th class="num">已实现 $</th><th class="num">笔数</th><th class="num">胜率</th></tr></thead>
+            <tbody id="monthlyRows"></tbody>
+          </table>
+          <p id="monthlyEmpty" class="hint" hidden>还没有卖出记录</p>
+        </section>
+        <section>
+          <h2>每周收益</h2>
+          <table class="data-table">
+            <thead><tr><th>周</th><th class="num">已实现 $</th><th class="num">笔数</th><th class="num">胜率</th></tr></thead>
+            <tbody id="weeklyRows"></tbody>
+          </table>
+          <p id="weeklyEmpty" class="hint" hidden>还没有卖出记录</p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 记录视图 ===================== -->
+  <div id="view-records" class="view scroll-view" hidden>
+    <div class="returns-wrap">
+      <section>
+        <div class="pos-head">
+          <h2>买卖记录管理</h2>
+          <input id="recFilter" class="rec-filter" placeholder="按代码筛选，如 AAPL">
+        </div>
+        <p class="hint">编辑或删除记录后，盈亏与周/月统计会自动重新计算。</p>
+        <table class="data-table">
+          <thead>
+            <tr><th>代码</th><th class="num">数量</th><th class="num">买入价</th><th>买入时间</th>
+                <th class="num">卖出价</th><th>卖出时间</th><th>备注</th><th class="num">盈亏 $</th><th>操作</th></tr>
+          </thead>
+          <tbody id="recordRows"></tbody>
+        </table>
+        <p id="recordEmpty" class="hint" hidden>还没有记录</p>
+      </section>
+    </div>
   </div>
 
   <!-- 卖出弹窗 -->
@@ -121,15 +174,32 @@
     <div class="modal-box">
       <h3>记录卖出 · <span id="sellModalSym"></span></h3>
       <p class="hint" id="sellModalInfo"></p>
-      <label>卖出单价 $
-        <input id="sellPriceInput" type="number" step="any" min="0">
-      </label>
-      <label>卖出时间
-        <input id="sellTimeInput" type="date">
-      </label>
+      <label>卖出单价 $<input id="sellPriceInput" type="number" step="any" min="0"></label>
+      <label>卖出时间<input id="sellTimeInput" type="date"></label>
       <div class="modal-actions">
         <button class="btn ghost" id="sellCancel">取消</button>
         <button class="btn" id="sellConfirm">确认卖出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 编辑记录弹窗 -->
+  <div id="editModal" class="modal" hidden>
+    <div class="modal-box">
+      <h3>编辑记录</h3>
+      <label>代码<input id="editSymbol" type="text"></label>
+      <div class="modal-grid">
+        <label>数量<input id="editQty" type="number" step="any" min="0"></label>
+        <label>买入价 $<input id="editBuyPrice" type="number" step="any" min="0"></label>
+        <label>买入时间<input id="editBuyTime" type="date"></label>
+        <label>卖出价 $<input id="editSellPrice" type="number" step="any" min="0"></label>
+        <label>卖出时间<input id="editSellTime" type="date"></label>
+        <label>备注<input id="editNote" type="text"></label>
+      </div>
+      <p class="hint">卖出时间留空 = 仍持仓（未实现）。</p>
+      <div class="modal-actions">
+        <button class="btn ghost" id="editCancel">取消</button>
+        <button class="btn" id="editConfirm">保存</button>
       </div>
     </div>
   </div>

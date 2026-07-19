@@ -85,19 +85,43 @@ func (h *api) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, assets)
 }
 
-// GET /api/bars/{symbol}
+// GET /api/bars/{symbol}?tf=1Day —— 支持 1Min/5Min/15Min/30Min/1Hour/1Day/1Week
 func (h *api) bars(w http.ResponseWriter, r *http.Request) {
 	sym := strings.ToUpper(strings.TrimPrefix(r.URL.Path, "/api/bars/"))
 	if sym == "" {
 		writeErr(w, http.StatusBadRequest, "缺少代码")
 		return
 	}
-	bars, err := getBars(h.svc.db, sym)
+	tf := r.URL.Query().Get("tf")
+	if tf == "" {
+		tf = "1Day"
+	}
+	bars, err := h.svc.Bars(sym, tf)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, bars)
+}
+
+// GET /api/signals/{symbol}?strategy=ma_5_20&tf=1Day —— 策略买卖点
+func (h *api) signals(w http.ResponseWriter, r *http.Request) {
+	sym := strings.ToUpper(strings.TrimPrefix(r.URL.Path, "/api/signals/"))
+	if sym == "" {
+		writeErr(w, http.StatusBadRequest, "缺少代码")
+		return
+	}
+	strat := r.URL.Query().Get("strategy")
+	tf := r.URL.Query().Get("tf")
+	if tf == "" {
+		tf = "1Day"
+	}
+	points, err := h.svc.Signals(sym, strat, tf)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, points)
 }
 
 // GET /api/positions | POST /api/positions
@@ -176,15 +200,36 @@ func (h *api) position(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodDelete {
+	switch r.Method {
+	case http.MethodPatch:
+		var p Position
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效的请求体")
+			return
+		}
+		p.ID = id
+		p.Symbol = strings.ToUpper(strings.TrimSpace(p.Symbol))
+		if p.Symbol == "" || p.Quantity <= 0 || p.BuyPrice < 0 {
+			writeErr(w, http.StatusBadRequest, "代码/数量/买入价不合法")
+			return
+		}
+		if p.SellTime == "" { // 未卖出则清空卖出价
+			p.SellPrice = 0
+		}
+		if err := updatePosition(h.svc.db, p); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	case http.MethodDelete:
+		if err := deletePosition(h.svc.db, id); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	default:
 		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
-		return
 	}
-	if err := deletePosition(h.svc.db, id); err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // PnLRow 是按股票聚合后的盈亏（持仓中用最新价算浮动盈亏，已卖出算已实现盈亏）。

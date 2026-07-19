@@ -56,6 +56,7 @@ func main() {
 	mux.HandleFunc("/api/symbols/", h.symbol)
 	mux.HandleFunc("/api/search", h.search)
 	mux.HandleFunc("/api/bars/", h.bars)
+	mux.HandleFunc("/api/signals/", h.signals)
 	mux.HandleFunc("/api/positions", h.positions)
 	mux.HandleFunc("/api/positions/", h.position)
 	mux.HandleFunc("/api/pnl", h.pnl)
