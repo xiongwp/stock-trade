@@ -59,6 +59,7 @@ func main() {
 	mux.HandleFunc("/api/positions", h.positions)
 	mux.HandleFunc("/api/positions/", h.position)
 	mux.HandleFunc("/api/pnl", h.pnl)
+	mux.HandleFunc("/api/stats", h.stats)
 	mux.HandleFunc("/api/strategies", h.strategies)
 	mux.HandleFunc("/api/alerts", h.alerts)
 	mux.HandleFunc("/api/refresh", h.refresh)

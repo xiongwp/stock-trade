@@ -220,19 +220,38 @@ async function loadPositions() {
   tbody.innerHTML = "";
   $("posEmpty").hidden = mine.length > 0;
   for (const p of mine) {
-    const pnl = (lastPrice - p.buyPrice) * p.quantity;
-    const pct = p.buyPrice > 0 ? (lastPrice - p.buyPrice) / p.buyPrice * 100 : 0;
+    const closed = !!p.sellTime;
+    // 已卖出：用卖出价算已实现盈亏；持仓中：用现价算浮动盈亏。
+    const exitPrice = closed ? p.sellPrice : lastPrice;
+    const pnl = (exitPrice - p.buyPrice) * p.quantity;
+    const pct = p.buyPrice > 0 ? (exitPrice - p.buyPrice) / p.buyPrice * 100 : 0;
     const cls = signCls(pnl);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${p.buyTime}${p.note ? ` <span class="flat">· ${p.note}</span>` : ""}</td>
       <td class="num">${fmtNum(p.quantity, 4)}</td>
       <td class="num">${fmtNum(p.buyPrice)}</td>
-      <td class="num">${lastPrice ? fmtNum(lastPrice) : "—"}</td>
-      <td class="num ${cls}">${pnl >= 0 ? "+" : ""}${fmtUsd(pnl)}</td>
+      <td>${closed ? p.sellTime : '<span class="flat">持仓中</span>'}</td>
+      <td class="num">${exitPrice ? fmtNum(exitPrice) : "—"}</td>
+      <td class="num ${cls}">${pnl >= 0 ? "+" : ""}${fmtUsd(pnl)}${closed ? '' : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
       <td class="num ${cls}">${pct >= 0 ? "+" : ""}${fmtNum(pct)}%</td>
-      <td class="num"><button class="pos-del" title="删除">✕</button></td>`;
-    tr.querySelector(".pos-del").addEventListener("click", () => deletePosition(p.id));
+      <td class="num pos-actions"></td>`;
+    const act = tr.querySelector(".pos-actions");
+    if (closed) {
+      const undo = document.createElement("button");
+      undo.className = "pos-link"; undo.textContent = "撤销卖出"; undo.title = "改回持仓";
+      undo.addEventListener("click", () => undoSell(p.id));
+      act.appendChild(undo);
+    } else {
+      const sell = document.createElement("button");
+      sell.className = "pos-link sell"; sell.textContent = "卖出";
+      sell.addEventListener("click", () => openSellModal(p, lastPrice));
+      act.appendChild(sell);
+    }
+    const del = document.createElement("button");
+    del.className = "pos-del"; del.title = "删除"; del.textContent = "✕";
+    del.addEventListener("click", () => deletePosition(p.id));
+    act.appendChild(del);
     tbody.appendChild(tr);
   }
 
@@ -248,11 +267,90 @@ async function loadPositions() {
 }
 
 function renderTotals(totals) {
-  const el = $("totalPnl");
   const usd = totals.unrealizedUsd || 0;
+  const el = $("totalPnl");
   el.className = "totals-value " + signCls(usd);
   el.textContent = `${usd >= 0 ? "+" : ""}${fmtUsd(usd)} (${fmtNum(totals.unrealizedPct || 0)}%)`;
+
+  const rz = totals.realizedUsd || 0;
+  const rel = $("totalRealized");
+  rel.className = "totals-value " + signCls(rz);
+  rel.textContent = `${rz >= 0 ? "+" : ""}${fmtUsd(rz)}`;
 }
+
+// ---------- 卖出弹窗 ----------
+let sellingId = null;
+function openSellModal(p, lastPrice) {
+  sellingId = p.id;
+  $("sellModalSym").textContent = p.symbol;
+  $("sellModalInfo").textContent = `买入 ${fmtNum(p.quantity, 4)} 股 @ $${fmtNum(p.buyPrice)}（${p.buyTime}）`;
+  $("sellPriceInput").value = lastPrice ? lastPrice.toFixed(2) : p.buyPrice.toFixed(2);
+  $("sellTimeInput").value = new Date().toISOString().slice(0, 10);
+  $("sellModal").hidden = false;
+}
+function closeSellModal() { $("sellModal").hidden = true; sellingId = null; }
+$("sellCancel").addEventListener("click", closeSellModal);
+$("sellModal").addEventListener("click", (e) => { if (e.target.id === "sellModal") closeSellModal(); });
+$("sellConfirm").addEventListener("click", async () => {
+  if (sellingId == null) return;
+  const price = parseFloat($("sellPriceInput").value);
+  const time = $("sellTimeInput").value;
+  if (isNaN(price) || price < 0 || !time) { alert("请填写有效的卖出价与时间"); return; }
+  const res = await fetch(`/api/positions/${sellingId}/sell`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sellPrice: price, sellTime: time }),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "卖出失败"); return; }
+  closeSellModal();
+  await loadPositions();
+  await loadStats();
+}
+
+async function undoSell(id) {
+  if (!confirm("撤销这笔卖出，改回持仓？")) return;
+  await fetch(`/api/positions/${id}/sell`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sellTime: "" }),
+  });
+  await loadPositions();
+  await loadStats();
+}
+
+// ---------- 已实现盈亏统计（周/月） ----------
+let statsData = { weekly: [], monthly: [] };
+let statsPeriod = "monthly";
+
+async function loadStats() {
+  statsData = await fetch("/api/stats").then((r) => r.json());
+  renderStats();
+}
+
+function renderStats() {
+  const rows = statsData[statsPeriod] || [];
+  const tbody = $("statRows");
+  tbody.innerHTML = "";
+  $("statEmpty").hidden = rows.length > 0;
+  for (const s of rows) {
+    const cls = signCls(s.realizedUsd);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${s.label}</td>
+      <td class="num ${cls}">${s.realizedUsd >= 0 ? "+" : ""}${fmtUsd(s.realizedUsd)}</td>
+      <td class="num flat">${s.trades}</td>
+      <td class="num flat">${s.wins}</td>
+      <td class="num">${fmtNum(s.winRate)}%</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+document.querySelectorAll(".stats-tabs .tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".stats-tabs .tab").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    statsPeriod = btn.dataset.period;
+    renderStats();
+  });
+});
 
 async function loadPnl() {
   const pnlRes = await fetch("/api/pnl").then((r) => r.json());
@@ -322,10 +420,11 @@ async function refreshLive() {
   await loadSymbols();
   await loadPnl();
   await loadAlerts();
+  await loadStats();
   if (state.selected) { updateChartHead(); await loadStrategies(); }
 }
 
 // ---------- 启动 ----------
 initChart();
-loadSymbols().then(() => { loadPnl(); loadAlerts(); });
+loadSymbols().then(() => { loadPnl(); loadAlerts(); loadStats(); });
 setInterval(refreshLive, 30000);

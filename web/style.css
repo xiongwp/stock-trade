@@ -123,6 +123,26 @@ h2 { font-size: 14px; margin: 0 0 8px; }
 .pos-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .pos-del:hover { color: var(--up); }
 
+/* 持仓操作 & 卖出弹窗 */
+.pos-actions { white-space: nowrap; }
+.pos-link { background: none; border: 1px solid var(--border); color: var(--accent); cursor: pointer; font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-right: 4px; }
+.pos-link.sell { color: var(--up); border-color: rgba(239,68,68,.4); }
+.pos-link:hover { background: var(--panel2); }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal-box { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 20px 22px; width: 340px; }
+.modal-box h3 { margin: 0 0 6px; font-size: 16px; }
+.modal-box label { display: block; margin: 12px 0 4px; color: var(--muted); font-size: 13px; }
+.modal-box input { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 14px; }
+.modal-box input:focus { outline: none; border-color: var(--accent); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* 统计 tab */
+.stats { margin-top: 22px; }
+.stats-tabs { display: flex; gap: 6px; }
+.stats-tabs .tab { background: var(--panel2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; font-size: 13px; padding: 5px 12px; border-radius: 6px; }
+.stats-tabs .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* 策略排行 */
 .strategies { margin-top: 22px; }
 .strat-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 8px 0; }
