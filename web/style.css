@@ -1,0 +1,109 @@
+:root {
+  --bg: #0f1115;
+  --panel: #171a21;
+  --border: #262b36;
+  --text: #e6e9ef;
+  --muted: #8b93a4;
+  --accent: #3b82f6;
+  --up: #ef4444;
+  --down: #22c55e;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 24px;
+  max-width: 900px;
+  margin-inline: auto;
+  font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+h1 { font-size: 20px; margin: 0; }
+
+.toolbar { display: flex; align-items: center; gap: 12px; }
+.auto { color: var(--muted); font-size: 13px; cursor: pointer; }
+
+.btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn:hover { filter: brightness(1.1); }
+.btn.ghost { background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+
+.add-form {
+  display: grid;
+  grid-template-columns: 1.2fr 1.5fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.add-form input {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 14px;
+}
+.add-form input:focus { outline: none; border-color: var(--accent); }
+
+.msg { min-height: 18px; margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+.msg.error { color: var(--up); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 13px; }
+tbody tr:last-child td { border-bottom: none; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.sym { font-weight: 600; }
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.flat { color: var(--muted); }
+
+td .price-input {
+  width: 80px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text);
+  text-align: right;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 6px;
+}
+td .price-input:hover { border-color: var(--border); }
+td .price-input:focus { outline: none; border-color: var(--accent); background: var(--bg); }
+
+.del {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+.del:hover { color: var(--up); }
+
+.empty { color: var(--muted); text-align: center; padding: 32px; }

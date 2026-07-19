@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>股票交易 · 模拟盘</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>自选股 · 行情</h1>
+    <div class="toolbar">
+      <button id="tickBtn" class="btn ghost">刷新模拟行情</button>
+      <label class="auto"><input type="checkbox" id="autoTick"> 自动（3s）</label>
+    </div>
+  </header>
+
+  <form id="addForm" class="add-form">
+    <input name="symbol" placeholder="代码 如 AAPL" required maxlength="16">
+    <input name="name" placeholder="名称（可选）" maxlength="32">
+    <input name="price" type="number" step="0.01" min="0" placeholder="初始价" required>
+    <button class="btn" type="submit">加入自选</button>
+  </form>
+
+  <p id="msg" class="msg"></p>
+
+  <table id="grid">
+    <thead>
+      <tr>
+        <th>代码</th><th>名称</th><th class="num">现价</th>
+        <th class="num">昨收</th><th class="num">涨跌</th><th class="num">涨跌幅</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <p id="empty" class="empty" hidden>还没有自选股，先在上面加一只。</p>
+
+  <script src="/app.js"></script>
+</body>
+</html>
