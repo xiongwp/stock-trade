@@ -3,37 +3,82 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>股票交易 · 模拟盘</title>
+  <title>股票交易终端 · Alpaca</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
-  <header>
-    <h1>自选股 · 行情</h1>
-    <div class="toolbar">
-      <button id="tickBtn" class="btn ghost">刷新模拟行情</button>
-      <label class="auto"><input type="checkbox" id="autoTick"> 自动（3s）</label>
+  <header class="topbar">
+    <h1>📈 股票交易终端</h1>
+    <div class="totals" id="totals">
+      <span class="totals-label">总盈亏</span>
+      <span class="totals-value flat" id="totalPnl">$0.00</span>
     </div>
+    <button id="refreshBtn" class="btn ghost" title="立即刷新报价与策略">刷新</button>
   </header>
 
-  <form id="addForm" class="add-form">
-    <input name="symbol" placeholder="代码 如 AAPL" required maxlength="16">
-    <input name="name" placeholder="名称（可选）" maxlength="32">
-    <input name="price" type="number" step="0.01" min="0" placeholder="初始价" required>
-    <button class="btn" type="submit">加入自选</button>
-  </form>
+  <div class="layout">
+    <!-- 左：检索 + 自选列表 -->
+    <aside class="sidebar">
+      <div class="search-box">
+        <input id="searchInput" placeholder="检索代码/名称，如 AAPL、苹果" autocomplete="off">
+        <div id="searchResults" class="search-results" hidden></div>
+      </div>
+      <ul id="watchlist" class="watchlist"></ul>
+      <p id="watchEmpty" class="hint">检索并添加股票开始跟踪</p>
+    </aside>
 
-  <p id="msg" class="msg"></p>
+    <!-- 中：图表 + 持仓 -->
+    <main class="main">
+      <div class="chart-head">
+        <div>
+          <span class="chart-symbol" id="chartSymbol">—</span>
+          <span class="chart-name" id="chartName"></span>
+        </div>
+        <div class="chart-quote">
+          <span class="chart-price" id="chartPrice">—</span>
+          <span class="chart-change flat" id="chartChange"></span>
+        </div>
+      </div>
+      <div class="chart-legend">
+        <span class="lg-candle">K线（红涨绿跌）</span>
+        <span class="lg-ma5">MA5</span>
+        <span class="lg-ma20">MA20</span>
+        <span class="lg-vol">成交量</span>
+      </div>
+      <div id="chart" class="chart"></div>
 
-  <table id="grid">
-    <thead>
-      <tr>
-        <th>代码</th><th>名称</th><th class="num">现价</th>
-        <th class="num">昨收</th><th class="num">涨跌</th><th class="num">涨跌幅</th><th></th>
-      </tr>
-    </thead>
-    <tbody id="rows"></tbody>
-  </table>
-  <p id="empty" class="empty" hidden>还没有自选股，先在上面加一只。</p>
+      <section class="positions">
+        <div class="pos-head">
+          <h2>我的持仓 · <span id="posSymbol">—</span></h2>
+          <div id="posPnl" class="pos-pnl"></div>
+        </div>
+        <form id="posForm" class="pos-form">
+          <input name="quantity" type="number" step="any" min="0" placeholder="数量" required>
+          <input name="buyPrice" type="number" step="any" min="0" placeholder="买入价 $" required>
+          <input name="buyTime" type="date" required>
+          <input name="note" placeholder="备注（可选）">
+          <button class="btn" type="submit">记录买入</button>
+        </form>
+        <table class="pos-table">
+          <thead>
+            <tr><th>买入时间</th><th class="num">数量</th><th class="num">买入价</th>
+                <th class="num">现价</th><th class="num">盈亏 $</th><th class="num">盈亏 %</th><th></th></tr>
+          </thead>
+          <tbody id="posRows"></tbody>
+        </table>
+        <p id="posEmpty" class="hint" hidden>该股票还没有买入记录</p>
+      </section>
+    </main>
+
+    <!-- 右：策略提醒 -->
+    <aside class="alerts">
+      <h2>策略提醒</h2>
+      <p class="hint">MA5/MA20 金叉死叉 · RSI 超买超卖</p>
+      <ul id="alertList" class="alert-list"></ul>
+      <p id="alertEmpty" class="hint">暂无提醒</p>
+    </aside>
+  </div>
 
   <script src="/app.js"></script>
 </body>

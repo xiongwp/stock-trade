@@ -1,3 +1,6 @@
 /stock-trade.db
+/stock-trade.db-wal
+/stock-trade.db-shm
 /server.log
 /stocktrade
+/config.json

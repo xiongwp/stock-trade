@@ -1,16 +1,15 @@
 package main
 
 import (
-	"database/sql"
 	"encoding/json"
-	"math/rand"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
-type server struct {
-	db *sql.DB
+type api struct {
+	svc *Service
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -23,120 +22,243 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// /api/stocks —— GET 列表, POST 新增
-func (s *server) handleStocks(w http.ResponseWriter, r *http.Request) {
+// GET /api/symbols | POST /api/symbols
+func (h *api) symbols(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		stocks, err := listStocks(s.db)
+		list, err := listSymbols(h.svc.db)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusOK, stocks)
-
+		writeJSON(w, http.StatusOK, list)
 	case http.MethodPost:
 		var req struct {
-			Symbol string  `json:"symbol"`
-			Name   string  `json:"name"`
-			Price  float64 `json:"price"`
+			Symbol string `json:"symbol"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeErr(w, http.StatusBadRequest, "无效的请求体")
 			return
 		}
-		req.Symbol = strings.ToUpper(strings.TrimSpace(req.Symbol))
-		if req.Symbol == "" {
-			writeErr(w, http.StatusBadRequest, "代码不能为空")
-			return
-		}
-		if req.Price < 0 {
-			writeErr(w, http.StatusBadRequest, "价格不能为负")
-			return
-		}
-		stock, err := addStock(s.db, req.Symbol, strings.TrimSpace(req.Name), req.Price)
+		sym, err := h.svc.AddSymbol(req.Symbol)
 		if err != nil {
-			if strings.Contains(err.Error(), "UNIQUE") {
-				writeErr(w, http.StatusConflict, "该代码已在自选中")
-				return
-			}
-			writeErr(w, http.StatusInternalServerError, err.Error())
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		writeJSON(w, http.StatusCreated, stock)
-
+		writeJSON(w, http.StatusCreated, sym)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
 	}
 }
 
-// /api/stocks/{id} —— PATCH 改价, DELETE 删除
-func (s *server) handleStock(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/stocks/")
+// DELETE /api/symbols/{symbol}
+func (h *api) symbol(w http.ResponseWriter, r *http.Request) {
+	sym := strings.ToUpper(strings.TrimPrefix(r.URL.Path, "/api/symbols/"))
+	if sym == "" {
+		writeErr(w, http.StatusBadRequest, "缺少代码")
+		return
+	}
+	if r.Method != http.MethodDelete {
+		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
+		return
+	}
+	if err := deleteSymbol(h.svc.db, sym); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GET /api/search?q=
+func (h *api) search(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	assets, err := h.svc.searchAssets(q, 30)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if assets == nil {
+		assets = []Asset{}
+	}
+	writeJSON(w, http.StatusOK, assets)
+}
+
+// GET /api/bars/{symbol}
+func (h *api) bars(w http.ResponseWriter, r *http.Request) {
+	sym := strings.ToUpper(strings.TrimPrefix(r.URL.Path, "/api/bars/"))
+	if sym == "" {
+		writeErr(w, http.StatusBadRequest, "缺少代码")
+		return
+	}
+	bars, err := getBars(h.svc.db, sym)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, bars)
+}
+
+// GET /api/positions | POST /api/positions
+func (h *api) positions(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := listPositions(h.svc.db)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+	case http.MethodPost:
+		var p Position
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效的请求体")
+			return
+		}
+		p.Symbol = strings.ToUpper(strings.TrimSpace(p.Symbol))
+		if p.Symbol == "" || p.Quantity <= 0 || p.BuyPrice < 0 {
+			writeErr(w, http.StatusBadRequest, "代码/数量/买入价不合法")
+			return
+		}
+		if p.BuyTime == "" {
+			p.BuyTime = time.Now().Format("2006-01-02")
+		}
+		id, err := addPosition(h.svc.db, p)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		p.ID = id
+		writeJSON(w, http.StatusCreated, p)
+	default:
+		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
+	}
+}
+
+// DELETE /api/positions/{id}
+func (h *api) position(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimPrefix(r.URL.Path, "/api/positions/")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
-
-	switch r.Method {
-	case http.MethodPatch:
-		var req struct {
-			Price float64 `json:"price"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeErr(w, http.StatusBadRequest, "无效的请求体")
-			return
-		}
-		if req.Price < 0 {
-			writeErr(w, http.StatusBadRequest, "价格不能为负")
-			return
-		}
-		if err := updatePrice(s.db, id, req.Price); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-
-	case http.MethodDelete:
-		if err := deleteStock(s.db, id); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-
-	default:
-		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
-	}
-}
-
-// /api/tick —— 模拟行情：对所有自选股做一次随机游走。
-func (s *server) handleTick(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodDelete {
 		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
 		return
 	}
-	stocks, err := listStocks(s.db)
+	if err := deletePosition(h.svc.db, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// PnLRow 是按股票聚合后的盈亏。
+type PnLRow struct {
+	Symbol        string  `json:"symbol"`
+	Quantity      float64 `json:"quantity"`
+	AvgCost       float64 `json:"avgCost"`
+	LastPrice     float64 `json:"lastPrice"`
+	CostBasis     float64 `json:"costBasis"`
+	MarketValue   float64 `json:"marketValue"`
+	UnrealizedUSD float64 `json:"unrealizedUsd"`
+	UnrealizedPct float64 `json:"unrealizedPct"`
+}
+
+// GET /api/pnl —— 按股票聚合持仓，用最新价算美金盈亏。
+func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
+	positions, err := listPositions(h.svc.db)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	for _, st := range stocks {
-		if st.Price <= 0 {
-			continue
-		}
-		// ±2% 以内的随机波动
-		delta := (rand.Float64()*2 - 1) * 0.02 * st.Price
-		newPrice := st.Price + delta
-		if newPrice < 0.01 {
-			newPrice = 0.01
-		}
-		// 保留两位小数
-		newPrice = float64(int(newPrice*100+0.5)) / 100
-		if err := updatePrice(s.db, st.ID, newPrice); err != nil {
-			writeErr(w, http.StatusInternalServerError, err.Error())
-			return
-		}
+	syms, err := listSymbols(h.svc.db)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
 	}
-	stocks, _ = listStocks(s.db)
-	writeJSON(w, http.StatusOK, stocks)
+	priceOf := map[string]float64{}
+	for _, s := range syms {
+		priceOf[s.Symbol] = s.LastPrice
+	}
+
+	agg := map[string]*PnLRow{}
+	order := []string{}
+	for _, p := range positions {
+		row, ok := agg[p.Symbol]
+		if !ok {
+			row = &PnLRow{Symbol: p.Symbol, LastPrice: priceOf[p.Symbol]}
+			agg[p.Symbol] = row
+			order = append(order, p.Symbol)
+		}
+		row.Quantity += p.Quantity
+		row.CostBasis += p.Quantity * p.BuyPrice
+	}
+
+	rows := []PnLRow{}
+	var totalCost, totalMV float64
+	for _, sym := range order {
+		row := agg[sym]
+		if row.Quantity > 0 {
+			row.AvgCost = row.CostBasis / row.Quantity
+		}
+		row.MarketValue = row.Quantity * row.LastPrice
+		row.UnrealizedUSD = row.MarketValue - row.CostBasis
+		if row.CostBasis > 0 {
+			row.UnrealizedPct = row.UnrealizedUSD / row.CostBasis * 100
+		}
+		totalCost += row.CostBasis
+		totalMV += row.MarketValue
+		rows = append(rows, *row)
+	}
+
+	totalPnL := totalMV - totalCost
+	totalPct := 0.0
+	if totalCost > 0 {
+		totalPct = totalPnL / totalCost * 100
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"rows": rows,
+		"totals": map[string]float64{
+			"costBasis":     totalCost,
+			"marketValue":   totalMV,
+			"unrealizedUsd": totalPnL,
+			"unrealizedPct": totalPct,
+		},
+	})
+}
+
+// GET /api/alerts
+func (h *api) alerts(w http.ResponseWriter, r *http.Request) {
+	list, err := listAlerts(h.svc.db, 100)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// POST /api/alerts/{id}/ack
+func (h *api) alertAck(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/alerts/")
+	idStr := strings.TrimSuffix(rest, "/ack")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "无效的 id")
+		return
+	}
+	if err := ackAlert(h.svc.db, id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/refresh —— 立即刷新报价与策略。
+func (h *api) refresh(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.RefreshAll(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

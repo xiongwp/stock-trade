@@ -1,0 +1,5 @@
+{
+  "keyId": "在此填入你的 Alpaca API Key ID",
+  "secretKey": "在此填入你的 Alpaca API Secret Key",
+  "feed": "iex"
+}
