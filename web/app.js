@@ -8,7 +8,20 @@ const state = {
   chart: null,
   series: {},
   strategies: [],
+  entrySide: "long",
 };
+
+// 方向感知的单笔盈亏。做空：开仓=卖出价，平仓=买入价，浮动=(卖出价-现价)。
+function lotPnl(p, lastPrice) {
+  const short = p.side === "short";
+  const closed = short ? !!p.buyTime : !!p.sellTime;
+  const entry = short ? p.sellPrice : p.buyPrice;
+  const exit = closed ? (short ? p.buyPrice : p.sellPrice) : lastPrice;
+  const pnl = short ? (p.sellPrice - exit) * p.quantity : (exit - p.buyPrice) * p.quantity;
+  const pct = entry > 0 ? (short ? (p.sellPrice - exit) : (exit - p.buyPrice)) / entry * 100 : 0;
+  return { short, closed, entry, exit, entryTime: short ? p.sellTime : p.buyTime, closeTime: short ? p.buyTime : p.sellTime, pnl, pct };
+}
+const sideBadge = (short) => `<span class="side-badge ${short ? "short" : "long"}">${short ? "空" : "多"}</span>`;
 
 const $ = (id) => document.getElementById(id);
 const fmtUsd = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -222,26 +235,24 @@ async function loadPositions() {
   tbody.innerHTML = "";
   $("posEmpty").hidden = mine.length > 0;
   for (const p of mine) {
-    const closed = !!p.sellTime;
-    const exitPrice = closed ? p.sellPrice : lastPrice;
-    const pnl = (exitPrice - p.buyPrice) * p.quantity;
-    const pct = p.buyPrice > 0 ? (exitPrice - p.buyPrice) / p.buyPrice * 100 : 0;
-    const cls = signCls(pnl);
+    const L = lotPnl(p, lastPrice);
+    const cls = signCls(L.pnl);
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${p.buyTime}${p.note ? ` <span class="flat">· ${p.note}</span>` : ""}</td>
+      <td>${sideBadge(L.short)}</td>
+      <td>${L.entryTime}${p.note ? ` <span class="flat">· ${p.note}</span>` : ""}</td>
       <td class="num">${fmtNum(p.quantity, 4)}</td>
-      <td class="num">${fmtNum(p.buyPrice)}</td>
-      <td>${closed ? p.sellTime : '<span class="flat">持仓中</span>'}</td>
-      <td class="num">${exitPrice ? fmtNum(exitPrice) : "—"}</td>
-      <td class="num ${cls}">${signStr(pnl)}${fmtUsd(pnl)}${closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
-      <td class="num ${cls}">${signStr(pct)}${fmtNum(pct)}%</td>
+      <td class="num">${fmtNum(L.entry)}</td>
+      <td>${L.closed ? L.closeTime : '<span class="flat">持仓中</span>'}</td>
+      <td class="num">${L.exit ? fmtNum(L.exit) : "—"}</td>
+      <td class="num ${cls}">${signStr(L.pnl)}${fmtUsd(L.pnl)}${L.closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
+      <td class="num ${cls}">${signStr(L.pct)}${fmtNum(L.pct)}%</td>
       <td class="num pos-actions"></td>`;
     const act = tr.querySelector(".pos-actions");
-    if (closed) {
-      act.appendChild(mkBtn("pos-link", "撤销卖出", () => undoSell(p.id)));
+    if (L.closed) {
+      act.appendChild(mkBtn("pos-link", L.short ? "撤销买入" : "撤销卖出", () => undoClose(p.id)));
     } else {
-      act.appendChild(mkBtn("pos-link sell", "卖出", () => openSellModal(p, lastPrice)));
+      act.appendChild(mkBtn("pos-link sell", L.short ? "买入平仓" : "卖出平仓", () => openSellModal(p, lastPrice)));
     }
     act.appendChild(mkBtn("pos-del", "✕", () => deletePosition(p.id), "删除"));
     tbody.appendChild(tr);
@@ -279,16 +290,32 @@ async function loadPnl() {
   renderTotals(pnlRes.totals);
 }
 
+// 做多/做空切换
+document.querySelectorAll("#sideToggle .side-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#sideToggle .side-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.entrySide = btn.dataset.side;
+    const short = state.entrySide === "short";
+    $("posForm").price.placeholder = short ? "卖出价 $" : "买入价 $";
+    $("posSubmit").textContent = short ? "记录卖出（做空开仓）" : "记录买入";
+  });
+});
+
 $("posForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   if (!state.selected) { alert("请先在左侧选择一只股票"); return; }
   const f = e.target;
+  const short = state.entrySide === "short";
+  const price = parseFloat(f.price.value), time = f.time.value;
+  const body = { symbol: state.selected, quantity: parseFloat(f.quantity.value), side: state.entrySide, note: f.note.value };
+  if (short) { body.sellPrice = price; body.sellTime = time; }
+  else { body.buyPrice = price; body.buyTime = time; }
   const res = await fetch("/api/positions", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol: state.selected, quantity: parseFloat(f.quantity.value), buyPrice: parseFloat(f.buyPrice.value), buyTime: f.buyTime.value, note: f.note.value }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (!res.ok) { const err = await res.json().catch(() => ({})); alert(err.error || "记录失败"); return; }
-  f.quantity.value = ""; f.buyPrice.value = ""; f.note.value = "";
+  f.quantity.value = ""; f.price.value = ""; f.note.value = "";
   await loadPositions();
 });
 

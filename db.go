@@ -43,10 +43,11 @@ func openDB(path string) (*sql.DB, error) {
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			symbol     TEXT NOT NULL,
 			quantity   REAL NOT NULL,
-			buy_price  REAL NOT NULL,
-			buy_time   TEXT NOT NULL,
+			buy_price  REAL NOT NULL DEFAULT 0,
+			buy_time   TEXT NOT NULL DEFAULT '',
 			sell_price REAL NOT NULL DEFAULT 0,
 			sell_time  TEXT NOT NULL DEFAULT '',
+			side       TEXT NOT NULL DEFAULT 'long',
 			note       TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);`,
@@ -74,6 +75,10 @@ func openDB(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	if err := ensureColumn(db, "positions", "sell_time", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
+	// side: long（做多，先买后卖）/ short（做空，先卖后买）。旧数据默认 long。
+	if err := ensureColumn(db, "positions", "side", "TEXT NOT NULL DEFAULT 'long'"); err != nil {
 		return nil, err
 	}
 	return db, nil
@@ -245,16 +250,33 @@ type Position struct {
 	Quantity  float64 `json:"quantity"`
 	BuyPrice  float64 `json:"buyPrice"`
 	BuyTime   string  `json:"buyTime"`
-	SellPrice float64 `json:"sellPrice"` // 0 表示未卖出
-	SellTime  string  `json:"sellTime"`  // 空表示未卖出（持仓中）
+	SellPrice float64 `json:"sellPrice"`
+	SellTime  string  `json:"sellTime"`
+	Side      string  `json:"side"` // long 做多（先买后卖）/ short 做空（先卖后买）
 	Note      string  `json:"note"`
 	CreatedAt string  `json:"createdAt"`
 }
 
-// Closed 表示该笔已卖出（已实现盈亏）。
-func (p Position) Closed() bool { return p.SellTime != "" }
+// Short 表示做空。
+func (p Position) Short() bool { return p.Side == "short" }
 
-// RealizedPnL 返回已实现盈亏（未卖出返回 0）。
+// Closed 表示已平仓：做多需卖出，做空需买入平仓。
+func (p Position) Closed() bool {
+	if p.Short() {
+		return p.BuyTime != ""
+	}
+	return p.SellTime != ""
+}
+
+// CloseTime 返回平仓时间（做多=卖出时间，做空=买入时间），用于周/月归属。
+func (p Position) CloseTime() string {
+	if p.Short() {
+		return p.BuyTime
+	}
+	return p.SellTime
+}
+
+// RealizedPnL 返回已实现盈亏。做多做空同公式：(卖出价-买入价)*数量。
 func (p Position) RealizedPnL() float64 {
 	if !p.Closed() {
 		return 0
@@ -262,11 +284,34 @@ func (p Position) RealizedPnL() float64 {
 	return (p.SellPrice - p.BuyPrice) * p.Quantity
 }
 
+// UnrealizedPnL 返回持仓中的浮动盈亏（按现价）。做空方向相反。
+func (p Position) UnrealizedPnL(cur float64) float64 {
+	if p.Closed() || cur <= 0 {
+		return 0
+	}
+	if p.Short() {
+		return (p.SellPrice - cur) * p.Quantity // 卖出价 - 现价
+	}
+	return (cur - p.BuyPrice) * p.Quantity
+}
+
+// EntryPrice 开仓价（做多=买入价，做空=卖出价）。
+func (p Position) EntryPrice() float64 {
+	if p.Short() {
+		return p.SellPrice
+	}
+	return p.BuyPrice
+}
+
 func addPosition(db *sql.DB, p Position) (int64, error) {
+	if p.Side != "short" {
+		p.Side = "long"
+	}
 	res, err := db.Exec(
-		`INSERT INTO positions (symbol, quantity, buy_price, buy_time, note, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		p.Symbol, p.Quantity, p.BuyPrice, p.BuyTime, p.Note, time.Now().Format(time.RFC3339),
+		`INSERT INTO positions (symbol, quantity, buy_price, buy_time, sell_price, sell_time, side, note, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		p.Symbol, p.Quantity, p.BuyPrice, p.BuyTime, p.SellPrice, p.SellTime, p.Side, p.Note,
+		time.Now().Format(time.RFC3339),
 	)
 	if err != nil {
 		return 0, err
@@ -274,9 +319,21 @@ func addPosition(db *sql.DB, p Position) (int64, error) {
 	return res.LastInsertId()
 }
 
+const posCols = `id, symbol, quantity, buy_price, buy_time, sell_price, sell_time, side, note, created_at`
+
+func scanPosition(rows interface{ Scan(...any) error }, p *Position) error {
+	return rows.Scan(&p.ID, &p.Symbol, &p.Quantity, &p.BuyPrice, &p.BuyTime,
+		&p.SellPrice, &p.SellTime, &p.Side, &p.Note, &p.CreatedAt)
+}
+
+func getPosition(db *sql.DB, id int64) (Position, error) {
+	var p Position
+	err := scanPosition(db.QueryRow(`SELECT `+posCols+` FROM positions WHERE id = ?`, id), &p)
+	return p, err
+}
+
 func listPositions(db *sql.DB) ([]Position, error) {
-	rows, err := db.Query(`SELECT id, symbol, quantity, buy_price, buy_time, sell_price, sell_time, note, created_at
-		FROM positions ORDER BY symbol, buy_time`)
+	rows, err := db.Query(`SELECT ` + posCols + ` FROM positions ORDER BY symbol, created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -284,8 +341,7 @@ func listPositions(db *sql.DB) ([]Position, error) {
 	out := []Position{}
 	for rows.Next() {
 		var p Position
-		if err := rows.Scan(&p.ID, &p.Symbol, &p.Quantity, &p.BuyPrice, &p.BuyTime,
-			&p.SellPrice, &p.SellTime, &p.Note, &p.CreatedAt); err != nil {
+		if err := scanPosition(rows, &p); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -293,19 +349,15 @@ func listPositions(db *sql.DB) ([]Position, error) {
 	return out, rows.Err()
 }
 
-// sellPosition 记录某笔买入的卖出价与卖出时间（sellTime 为空则撤销卖出，改回持仓）。
-func sellPosition(db *sql.DB, id int64, sellPrice float64, sellTime string) error {
-	_, err := db.Exec(`UPDATE positions SET sell_price = ?, sell_time = ? WHERE id = ?`,
-		sellPrice, sellTime, id)
-	return err
-}
-
 // updatePosition 全字段更新一条记录（用于记录管理里的编辑）。盈亏由查询实时派生，改后自动同步。
 func updatePosition(db *sql.DB, p Position) error {
+	if p.Side != "short" {
+		p.Side = "long"
+	}
 	_, err := db.Exec(
 		`UPDATE positions SET symbol = ?, quantity = ?, buy_price = ?, buy_time = ?,
-		 sell_price = ?, sell_time = ?, note = ? WHERE id = ?`,
-		p.Symbol, p.Quantity, p.BuyPrice, p.BuyTime, p.SellPrice, p.SellTime, p.Note, p.ID,
+		 sell_price = ?, sell_time = ?, side = ?, note = ? WHERE id = ?`,
+		p.Symbol, p.Quantity, p.BuyPrice, p.BuyTime, p.SellPrice, p.SellTime, p.Side, p.Note, p.ID,
 	)
 	return err
 }

@@ -141,12 +141,32 @@ func (h *api) positions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		p.Symbol = strings.ToUpper(strings.TrimSpace(p.Symbol))
-		if p.Symbol == "" || p.Quantity <= 0 || p.BuyPrice < 0 {
-			writeErr(w, http.StatusBadRequest, "代码/数量/买入价不合法")
+		if p.Side != "short" {
+			p.Side = "long"
+		}
+		if p.Symbol == "" || p.Quantity <= 0 {
+			writeErr(w, http.StatusBadRequest, "代码/数量不合法")
 			return
 		}
-		if p.BuyTime == "" {
-			p.BuyTime = time.Now().Format("2006-01-02")
+		// 做多：买入为开仓腿；做空：卖出为开仓腿。
+		if p.Short() {
+			if p.SellPrice < 0 {
+				writeErr(w, http.StatusBadRequest, "卖出价不合法")
+				return
+			}
+			if p.SellTime == "" {
+				p.SellTime = time.Now().Format("2006-01-02")
+			}
+			p.BuyPrice, p.BuyTime = 0, "" // 尚未买入平仓
+		} else {
+			if p.BuyPrice < 0 {
+				writeErr(w, http.StatusBadRequest, "买入价不合法")
+				return
+			}
+			if p.BuyTime == "" {
+				p.BuyTime = time.Now().Format("2006-01-02")
+			}
+			p.SellPrice, p.SellTime = 0, "" // 尚未卖出平仓
 		}
 		id, err := addPosition(h.svc.db, p)
 		if err != nil {
@@ -160,23 +180,26 @@ func (h *api) positions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// DELETE /api/positions/{id}  ·  POST /api/positions/{id}/sell
+// DELETE /api/positions/{id}  ·  POST /api/positions/{id}/close（或 /sell 兼容）
 func (h *api) position(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, "/api/positions/")
-	isSell := strings.HasSuffix(rest, "/sell")
-	idStr := strings.TrimSuffix(rest, "/sell")
+	isClose := strings.HasSuffix(rest, "/close") || strings.HasSuffix(rest, "/sell")
+	idStr := strings.TrimSuffix(strings.TrimSuffix(rest, "/close"), "/sell")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
 
-	if isSell {
+	if isClose {
 		if r.Method != http.MethodPost {
 			writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
 			return
 		}
+		// 兼容旧字段名 sellPrice/sellTime，同时支持通用 price/time。
 		var req struct {
+			Price     float64 `json:"price"`
+			Time      string  `json:"time"`
 			SellPrice float64 `json:"sellPrice"`
 			SellTime  string  `json:"sellTime"`
 		}
@@ -184,15 +207,36 @@ func (h *api) position(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "无效的请求体")
 			return
 		}
-		// sellTime 为空表示撤销卖出（改回持仓）；非空则必须校验价格。
-		if req.SellTime != "" && req.SellPrice < 0 {
-			writeErr(w, http.StatusBadRequest, "卖出价不合法")
+		price, tm := req.Price, req.Time
+		if tm == "" && req.SellTime != "" || price == 0 && req.SellPrice != 0 {
+			price, tm = req.SellPrice, req.SellTime
+		}
+		if tm != "" && price < 0 {
+			writeErr(w, http.StatusBadRequest, "平仓价不合法")
 			return
 		}
-		if req.SellTime == "" {
-			req.SellPrice = 0
+		p, err := getPosition(h.svc.db, id)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, "记录不存在")
+			return
 		}
-		if err := sellPosition(h.svc.db, id, req.SellPrice, req.SellTime); err != nil {
+		// 平仓腿：做空填买入，做多填卖出。time 为空则撤销平仓。
+		if p.Short() {
+			p.BuyTime = tm
+			if tm == "" {
+				p.BuyPrice = 0
+			} else {
+				p.BuyPrice = price
+			}
+		} else {
+			p.SellTime = tm
+			if tm == "" {
+				p.SellPrice = 0
+			} else {
+				p.SellPrice = price
+			}
+		}
+		if err := updatePosition(h.svc.db, p); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -209,12 +253,22 @@ func (h *api) position(w http.ResponseWriter, r *http.Request) {
 		}
 		p.ID = id
 		p.Symbol = strings.ToUpper(strings.TrimSpace(p.Symbol))
-		if p.Symbol == "" || p.Quantity <= 0 || p.BuyPrice < 0 {
-			writeErr(w, http.StatusBadRequest, "代码/数量/买入价不合法")
+		if p.Side != "short" {
+			p.Side = "long"
+		}
+		if p.Symbol == "" || p.Quantity <= 0 {
+			writeErr(w, http.StatusBadRequest, "代码/数量不合法")
 			return
 		}
-		if p.SellTime == "" { // 未卖出则清空卖出价
-			p.SellPrice = 0
+		// 未平仓则清空平仓腿。
+		if p.Short() {
+			if p.BuyTime == "" {
+				p.BuyPrice = 0
+			}
+		} else {
+			if p.SellTime == "" {
+				p.SellPrice = 0
+			}
 		}
 		if err := updatePosition(h.svc.db, p); err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -263,6 +317,7 @@ func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agg := map[string]*PnLRow{}
+	absQty := map[string]float64{} // 用于算加权开仓均价（多空都按绝对数量）
 	order := []string{}
 	for _, p := range positions {
 		row, ok := agg[p.Symbol]
@@ -273,41 +328,47 @@ func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.Closed() {
 			row.RealizedUSD += p.RealizedPnL()
+			continue
+		}
+		// 未平仓：方向感知的浮动盈亏。做空持仓数量记为负。
+		row.UnrealizedUSD += p.UnrealizedPnL(row.LastPrice)
+		row.CostBasis += p.EntryPrice() * p.Quantity // 开仓名义额
+		row.MarketValue += p.Quantity * row.LastPrice
+		absQty[p.Symbol] += p.Quantity
+		if p.Short() {
+			row.Quantity -= p.Quantity
 		} else {
 			row.Quantity += p.Quantity
-			row.CostBasis += p.Quantity * p.BuyPrice
 		}
 	}
 
 	rows := []PnLRow{}
-	var totalCost, totalMV, totalRealized float64
+	var totalCost, totalMV, totalRealized, totalUnrl float64
 	for _, sym := range order {
 		row := agg[sym]
-		if row.Quantity > 0 {
-			row.AvgCost = row.CostBasis / row.Quantity
+		if absQty[sym] > 0 {
+			row.AvgCost = row.CostBasis / absQty[sym]
 		}
-		row.MarketValue = row.Quantity * row.LastPrice
-		row.UnrealizedUSD = row.MarketValue - row.CostBasis
 		if row.CostBasis > 0 {
 			row.UnrealizedPct = row.UnrealizedUSD / row.CostBasis * 100
 		}
 		totalCost += row.CostBasis
 		totalMV += row.MarketValue
 		totalRealized += row.RealizedUSD
+		totalUnrl += row.UnrealizedUSD
 		rows = append(rows, *row)
 	}
 
-	totalPnL := totalMV - totalCost
 	totalPct := 0.0
 	if totalCost > 0 {
-		totalPct = totalPnL / totalCost * 100
+		totalPct = totalUnrl / totalCost * 100
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"rows": rows,
 		"totals": map[string]float64{
 			"costBasis":     totalCost,
 			"marketValue":   totalMV,
-			"unrealizedUsd": totalPnL,
+			"unrealizedUsd": totalUnrl,
 			"unrealizedPct": totalPct,
 			"realizedUsd":   totalRealized,
 		},
@@ -347,7 +408,7 @@ func (h *api) stats(w http.ResponseWriter, r *http.Request) {
 		if !p.Closed() {
 			continue
 		}
-		t, ok := parseDay(p.SellTime)
+		t, ok := parseDay(p.CloseTime())
 		if !ok {
 			continue
 		}

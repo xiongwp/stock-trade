@@ -72,17 +72,21 @@
           <h2>我的持仓 · <span id="posSymbol">—</span></h2>
           <div id="posPnl" class="pos-pnl"></div>
         </div>
+        <div class="side-toggle" id="sideToggle">
+          <button type="button" class="side-btn active" data-side="long">做多（先买后卖）</button>
+          <button type="button" class="side-btn" data-side="short">做空（先卖后买）</button>
+        </div>
         <form id="posForm" class="pos-form">
           <input name="quantity" type="number" step="any" min="0" placeholder="数量" required>
-          <input name="buyPrice" type="number" step="any" min="0" placeholder="买入价 $" required>
-          <input name="buyTime" type="date" required>
+          <input name="price" type="number" step="any" min="0" placeholder="买入价 $" required>
+          <input name="time" type="date" required>
           <input name="note" placeholder="备注（可选）">
-          <button class="btn" type="submit">记录买入</button>
+          <button class="btn" type="submit" id="posSubmit">记录买入</button>
         </form>
         <table class="pos-table">
           <thead>
-            <tr><th>买入时间</th><th class="num">数量</th><th class="num">买入价</th>
-                <th>卖出时间</th><th class="num">卖出/现价</th>
+            <tr><th>方向</th><th>开仓时间</th><th class="num">数量</th><th class="num">开仓价</th>
+                <th>平仓时间</th><th class="num">平仓/现价</th>
                 <th class="num">盈亏 $</th><th class="num">盈亏 %</th><th>操作</th></tr>
           </thead>
           <tbody id="posRows"></tbody>
@@ -160,7 +164,7 @@
         <p class="hint">编辑或删除记录后，盈亏与周/月统计会自动重新计算。</p>
         <table class="data-table">
           <thead>
-            <tr><th>代码</th><th class="num">数量</th><th class="num">买入价</th><th>买入时间</th>
+            <tr><th>代码</th><th>方向</th><th class="num">数量</th><th class="num">买入价</th><th>买入时间</th>
                 <th class="num">卖出价</th><th>卖出时间</th><th>备注</th><th class="num">盈亏 $</th><th>操作</th></tr>
           </thead>
           <tbody id="recordRows"></tbody>
@@ -170,16 +174,16 @@
     </div>
   </div>
 
-  <!-- 卖出弹窗 -->
+  <!-- 平仓弹窗（做多=卖出平仓，做空=买入平仓） -->
   <div id="sellModal" class="modal" hidden>
     <div class="modal-box">
-      <h3>记录卖出 · <span id="sellModalSym"></span></h3>
+      <h3 id="sellModalTitle">平仓 · <span id="sellModalSym"></span></h3>
       <p class="hint" id="sellModalInfo"></p>
-      <label>卖出单价 $<input id="sellPriceInput" type="number" step="any" min="0"></label>
-      <label>卖出时间<input id="sellTimeInput" type="date"></label>
+      <label id="sellPriceLabel">平仓单价 $<input id="sellPriceInput" type="number" step="any" min="0"></label>
+      <label id="sellTimeLabel">平仓时间<input id="sellTimeInput" type="date"></label>
       <div class="modal-actions">
         <button class="btn ghost" id="sellCancel">取消</button>
-        <button class="btn" id="sellConfirm">确认卖出</button>
+        <button class="btn" id="sellConfirm">确认平仓</button>
       </div>
     </div>
   </div>
@@ -188,7 +192,10 @@
   <div id="editModal" class="modal" hidden>
     <div class="modal-box">
       <h3>编辑记录</h3>
-      <label>代码<input id="editSymbol" type="text"></label>
+      <div class="modal-grid">
+        <label>代码<input id="editSymbol" type="text"></label>
+        <label>方向<select id="editSide"><option value="long">做多</option><option value="short">做空</option></select></label>
+      </div>
       <div class="modal-grid">
         <label>数量<input id="editQty" type="number" step="any" min="0"></label>
         <label>买入价 $<input id="editBuyPrice" type="number" step="any" min="0"></label>
