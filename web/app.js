@@ -532,7 +532,20 @@ async function refreshLive() {
   if (!$("view-records").hidden) loadRecords();
 }
 
+// ---------- 服务地址 ----------
+async function loadServerInfo() {
+  let info;
+  try { info = await fetch("/api/server-info").then((r) => r.json()); } catch { return; }
+  const el = $("serverAddr");
+  const addrs = info.addresses || [];
+  if (!addrs.length) { el.textContent = ""; return; }
+  el.innerHTML = `📱 手机访问：<b>${addrs[0].url}</b>`;
+  el.onclick = () => alert("可用访问地址（手机与本机在同一 WiFi 下）：\n\n" +
+    addrs.map((a) => `${a.label}\n${a.url}`).join("\n\n"));
+}
+
 // ---------- 启动 ----------
 initChart();
+loadServerInfo();
 loadSymbols().then(() => { loadPnl(); loadAlerts(); });
 setInterval(refreshLive, 30000);

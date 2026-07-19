@@ -428,6 +428,14 @@ func (h *api) strategies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// GET /api/server-info —— 返回可访问的服务地址（供页面显示，含手机局域网地址）。
+func (h *api) serverInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"port":      listenPort,
+		"addresses": serverAddrs(listenPort),
+	})
+}
+
 // POST /api/refresh —— 立即刷新报价与策略。
 func (h *api) refresh(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RefreshAll(); err != nil {

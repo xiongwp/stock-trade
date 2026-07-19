@@ -13,6 +13,9 @@ import (
 //go:embed web
 var webFS embed.FS
 
+// listenPort 是服务端口。绑定 0.0.0.0 以便家庭局域网内的手机也能访问。
+const listenPort = "9010"
+
 // recoverMW 拦截每个请求中的 panic，避免单个请求打崩整个进程。
 func recoverMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +64,7 @@ func main() {
 	mux.HandleFunc("/api/positions/", h.position)
 	mux.HandleFunc("/api/pnl", h.pnl)
 	mux.HandleFunc("/api/stats", h.stats)
+	mux.HandleFunc("/api/server-info", h.serverInfo)
 	mux.HandleFunc("/api/strategies", h.strategies)
 	mux.HandleFunc("/api/alerts", h.alerts)
 	mux.HandleFunc("/api/refresh", h.refresh)
@@ -73,16 +77,19 @@ func main() {
 	})
 	mux.Handle("/", http.FileServer(http.FS(staticFS)))
 
-	addr := "localhost:9010"
+	// 绑定 0.0.0.0，局域网内的手机等设备也能访问。
 	srv := &http.Server{
-		Addr:              addr,
+		Addr:              "0.0.0.0:" + listenPort,
 		Handler:           recoverMW(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("股票交易终端（%s 行情）已启动 → http://%s", strings.ToUpper(cfg.Feed), addr)
+	log.Printf("股票交易终端（%s 行情）已启动，可用访问地址：", strings.ToUpper(cfg.Feed))
+	for _, a := range serverAddrs(listenPort) {
+		log.Printf("    %-28s %s", a.Label, a.URL)
+	}
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("服务器退出: %v", err)
 	}
