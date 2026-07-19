@@ -1,33 +1,40 @@
 "use strict";
 
-// ---------- 全局状态 ----------
 const state = {
-  selected: null,      // 当前选中的代码
-  symbols: [],         // 自选列表（含报价）
+  selected: null,
+  tf: "1Day",
+  selectedStrategy: null,
+  symbols: [],
   chart: null,
-  series: {},          // candle / vol / ma5 / ma20
+  series: {},
+  strategies: [],
 };
 
 const $ = (id) => document.getElementById(id);
+const fmtUsd = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtNum = (n, d = 2) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const signCls = (n) => (n > 0 ? "up" : n < 0 ? "down" : "flat");
+const isIntraday = (tf) => tf.endsWith("Min") || tf.endsWith("Hour");
+const signStr = (n) => (n >= 0 ? "+" : "");
 
-function fmtUsd(n) {
-  const s = n < 0 ? "-" : "";
-  return s + "$" + Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// ---------- 视图切换 ----------
+function showView(name) {
+  document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${name}`));
+  document.querySelectorAll(".nav-tab").forEach((t) => t.classList.toggle("active", t.dataset.view === name));
+  if (name === "returns") loadReturns();
+  if (name === "records") loadRecords();
+  if (name === "trade" && state.chart) state.chart.timeScale().fitContent();
 }
-function fmtNum(n, d = 2) {
-  return Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
-}
-function signCls(n) { return n > 0 ? "up" : n < 0 ? "down" : "flat"; }
+document.querySelectorAll(".nav-tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
 
 // ---------- 图表 ----------
 function initChart() {
-  const el = $("chart");
-  const chart = LightweightCharts.createChart(el, {
+  const chart = LightweightCharts.createChart($("chart"), {
     autoSize: true,
     layout: { background: { color: "#171a21" }, textColor: "#8b93a4", fontFamily: "inherit" },
     grid: { vertLines: { color: "#262b36" }, horzLines: { color: "#262b36" } },
     rightPriceScale: { borderColor: "#262b36" },
-    timeScale: { borderColor: "#262b36" },
+    timeScale: { borderColor: "#262b36", timeVisible: false, secondsVisible: false },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   });
   const candle = chart.addCandlestickSeries({
@@ -38,14 +45,8 @@ function initChart() {
   chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
   const ma5 = chart.addLineSeries({ color: "#f59e0b", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
   const ma20 = chart.addLineSeries({ color: "#a855f7", lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
-
   state.chart = chart;
   state.series = { candle, vol, ma5, ma20 };
-}
-
-function toChartTime(unixSec) {
-  const d = new Date(unixSec * 1000);
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
 }
 
 function smaSeries(bars, period) {
@@ -54,28 +55,65 @@ function smaSeries(bars, period) {
   for (let i = 0; i < bars.length; i++) {
     sum += bars[i].close;
     if (i >= period) sum -= bars[i - period].close;
-    if (i >= period - 1) out.push({ time: toChartTime(bars[i].time), value: sum / period });
+    if (i >= period - 1) out.push({ time: bars[i].time, value: sum / period });
   }
   return out;
 }
 
-async function loadChart(symbol) {
-  const bars = await (await fetch(`/api/bars/${symbol}`)).json();
-  const candles = bars.map((b) => ({ time: toChartTime(b.time), open: b.open, high: b.high, low: b.low, close: b.close }));
-  const vols = bars.map((b) => ({ time: toChartTime(b.time), value: b.volume, color: b.close >= b.open ? "rgba(239,68,68,.4)" : "rgba(34,197,94,.4)" }));
-  state.series.candle.setData(candles);
-  state.series.vol.setData(vols);
+async function loadChart() {
+  const symbol = state.selected;
+  if (!symbol) return;
+  let bars;
+  try {
+    bars = await (await fetch(`/api/bars/${symbol}?tf=${state.tf}`)).json();
+  } catch { bars = []; }
+  if (!Array.isArray(bars)) bars = [];
+  state.chart.applyOptions({ timeScale: { timeVisible: isIntraday(state.tf), secondsVisible: false } });
+  state.series.candle.setData(bars.map((b) => ({ time: b.time, open: b.open, high: b.high, low: b.low, close: b.close })));
+  state.series.vol.setData(bars.map((b) => ({ time: b.time, value: b.volume, color: b.close >= b.open ? "rgba(239,68,68,.4)" : "rgba(34,197,94,.4)" })));
   state.series.ma5.setData(smaSeries(bars, 5));
   state.series.ma20.setData(smaSeries(bars, 20));
   state.chart.timeScale().fitContent();
+  await applyMarkers();
 }
+
+async function applyMarkers() {
+  if (!state.selectedStrategy || !state.selected) {
+    state.series.candle.setMarkers([]);
+    $("markerLegend").hidden = true;
+    return;
+  }
+  let pts = [];
+  try {
+    pts = await (await fetch(`/api/signals/${state.selected}?strategy=${state.selectedStrategy}&tf=${state.tf}`)).json();
+  } catch { pts = []; }
+  if (!Array.isArray(pts)) pts = [];
+  const markers = pts.map((p) =>
+    p.side === 1
+      ? { time: p.time, position: "belowBar", color: "#ef4444", shape: "arrowUp", text: "买" }
+      : { time: p.time, position: "aboveBar", color: "#22c55e", shape: "arrowDown", text: "卖" }
+  );
+  markers.sort((a, b) => a.time - b.time);
+  state.series.candle.setMarkers(markers);
+  $("markerLegend").hidden = markers.length === 0;
+}
+
+// 周期切换
+document.querySelectorAll("#tfBar .tf").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("#tfBar .tf").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    state.tf = btn.dataset.tf;
+    loadChart();
+  });
+});
 
 // ---------- 自选列表 ----------
 async function loadSymbols() {
   state.symbols = await (await fetch("/api/symbols")).json();
   renderWatchlist();
   $("watchEmpty").hidden = state.symbols.length > 0;
-  if (!state.selected && state.symbols.length) selectSymbol(state.symbols[0].symbol);
+  if (!state.selected && state.symbols.length) await selectSymbol(state.symbols[0].symbol);
   if (state.selected) updateChartHead();
 }
 
@@ -89,14 +127,9 @@ function renderWatchlist() {
     const li = document.createElement("li");
     li.className = "watch-item" + (s.symbol === state.selected ? " active" : "");
     li.innerHTML = `
-      <div class="w-left">
-        <div class="w-sym">${s.symbol}</div>
-        <div class="w-name">${s.name || ""}</div>
-      </div>
-      <div class="w-right">
-        <div class="w-price">${s.lastPrice ? fmtNum(s.lastPrice) : "—"}</div>
-        <div class="w-chg ${cls}">${chg >= 0 ? "+" : ""}${fmtNum(pct)}%</div>
-      </div>
+      <div class="w-left"><div class="w-sym">${s.symbol}</div><div class="w-name">${s.name || ""}</div></div>
+      <div class="w-right"><div class="w-price">${s.lastPrice ? fmtNum(s.lastPrice) : "—"}</div>
+        <div class="w-chg ${cls}">${signStr(chg)}${fmtNum(pct)}%</div></div>
       <button class="watch-del" title="移除">✕</button>`;
     li.querySelector(".w-left").addEventListener("click", () => selectSymbol(s.symbol));
     li.querySelector(".w-right").addEventListener("click", () => selectSymbol(s.symbol));
@@ -116,7 +149,7 @@ function updateChartHead() {
   $("chartPrice").textContent = s.lastPrice ? fmtNum(s.lastPrice) : "—";
   const chgEl = $("chartChange");
   chgEl.className = "chart-change " + cls;
-  chgEl.textContent = s.lastPrice ? `${chg >= 0 ? "+" : ""}${fmtNum(chg)} (${chg >= 0 ? "+" : ""}${fmtNum(pct)}%)` : "";
+  chgEl.textContent = s.lastPrice ? `${signStr(chg)}${fmtNum(chg)} (${signStr(chg)}${fmtNum(pct)}%)` : "";
 }
 
 async function selectSymbol(symbol) {
@@ -125,34 +158,9 @@ async function selectSymbol(symbol) {
   updateChartHead();
   $("posSymbol").textContent = symbol;
   $("posForm").buyTime.value = new Date().toISOString().slice(0, 10);
-  await loadChart(symbol);
+  await loadChart();
   await loadPositions();
-  await loadStrategies();
-}
-
-// ---------- 策略排行 ----------
-const sigBadge = { 1: ["买入", "up"], "-1": ["卖出", "down"], 0: ["观望", "flat"] };
-
-async function loadStrategies() {
-  const sym = state.selected;
-  $("stratSymbol").textContent = sym || "—";
-  const stats = await fetch(`/api/strategies?symbol=${encodeURIComponent(sym || "")}`).then((r) => r.json());
-  const tbody = $("stratRows");
-  tbody.innerHTML = "";
-  stats.forEach((s, i) => {
-    const [label, cls] = sigBadge[s.currentSignal] || sigBadge[0];
-    const wr = s.trades > 0 ? fmtNum(s.winRate) + "%" : "—";
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td class="rank">${i + 1}</td>
-      <td><div class="strat-name">${s.name}</div><div class="strat-desc">${s.desc}</div></td>
-      <td class="num strat-wr">${wr}</td>
-      <td class="num flat">${s.trades}</td>
-      <td class="num ${signCls(s.avgReturn)}">${s.avgReturn >= 0 ? "+" : ""}${fmtNum(s.avgReturn)}%</td>
-      <td class="num ${signCls(s.totalReturn)}">${s.totalReturn >= 0 ? "+" : ""}${fmtNum(s.totalReturn)}%</td>
-      <td><span class="sig-badge ${cls}">${label}</span>${s.symbolTrades ? ` <span class="flat" style="font-size:11px">(该股胜率 ${fmtNum(s.symbolWinRate)}%)</span>` : ""}</td>`;
-    tbody.appendChild(tr);
-  });
+  await loadStrategyList();
 }
 
 async function removeSymbol(symbol) {
@@ -171,9 +179,7 @@ $("searchInput").addEventListener("input", (e) => {
   if (!q) { $("searchResults").hidden = true; return; }
   searchTimer = setTimeout(() => runSearch(q), 250);
 });
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".search-box")) $("searchResults").hidden = true;
-});
+document.addEventListener("click", (e) => { if (!e.target.closest(".search-box")) $("searchResults").hidden = true; });
 
 async function runSearch(q) {
   const results = await (await fetch(`/api/search?q=${encodeURIComponent(q)}`)).json();
@@ -194,23 +200,19 @@ async function addSymbol(symbol) {
   $("searchResults").hidden = true;
   $("searchInput").value = "";
   const res = await fetch("/api/symbols", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ symbol }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol }),
   });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "添加失败"); return; }
   await loadSymbols();
-  selectSymbol(symbol);
+  await selectSymbol(symbol);
 }
 
-// ---------- 持仓 & 盈亏 ----------
-let currentPnl = { rows: [], totals: {} };
-
+// ---------- 持仓 ----------
 async function loadPositions() {
   const [positions, pnlRes] = await Promise.all([
     fetch("/api/positions").then((r) => r.json()),
     fetch("/api/pnl").then((r) => r.json()),
   ]);
-  currentPnl = pnlRes;
   const sym = state.selected;
   const mine = positions.filter((p) => p.symbol === sym);
   const priceRow = pnlRes.rows.find((r) => r.symbol === sym);
@@ -221,7 +223,6 @@ async function loadPositions() {
   $("posEmpty").hidden = mine.length > 0;
   for (const p of mine) {
     const closed = !!p.sellTime;
-    // 已卖出：用卖出价算已实现盈亏；持仓中：用现价算浮动盈亏。
     const exitPrice = closed ? p.sellPrice : lastPrice;
     const pnl = (exitPrice - p.buyPrice) * p.quantity;
     const pct = p.buyPrice > 0 ? (exitPrice - p.buyPrice) / p.buyPrice * 100 : 0;
@@ -233,25 +234,16 @@ async function loadPositions() {
       <td class="num">${fmtNum(p.buyPrice)}</td>
       <td>${closed ? p.sellTime : '<span class="flat">持仓中</span>'}</td>
       <td class="num">${exitPrice ? fmtNum(exitPrice) : "—"}</td>
-      <td class="num ${cls}">${pnl >= 0 ? "+" : ""}${fmtUsd(pnl)}${closed ? '' : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
-      <td class="num ${cls}">${pct >= 0 ? "+" : ""}${fmtNum(pct)}%</td>
+      <td class="num ${cls}">${signStr(pnl)}${fmtUsd(pnl)}${closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
+      <td class="num ${cls}">${signStr(pct)}${fmtNum(pct)}%</td>
       <td class="num pos-actions"></td>`;
     const act = tr.querySelector(".pos-actions");
     if (closed) {
-      const undo = document.createElement("button");
-      undo.className = "pos-link"; undo.textContent = "撤销卖出"; undo.title = "改回持仓";
-      undo.addEventListener("click", () => undoSell(p.id));
-      act.appendChild(undo);
+      act.appendChild(mkBtn("pos-link", "撤销卖出", () => undoSell(p.id)));
     } else {
-      const sell = document.createElement("button");
-      sell.className = "pos-link sell"; sell.textContent = "卖出";
-      sell.addEventListener("click", () => openSellModal(p, lastPrice));
-      act.appendChild(sell);
+      act.appendChild(mkBtn("pos-link sell", "卖出", () => openSellModal(p, lastPrice)));
     }
-    const del = document.createElement("button");
-    del.className = "pos-del"; del.title = "删除"; del.textContent = "✕";
-    del.addEventListener("click", () => deletePosition(p.id));
-    act.appendChild(del);
+    act.appendChild(mkBtn("pos-del", "✕", () => deletePosition(p.id), "删除"));
     tbody.appendChild(tr);
   }
 
@@ -259,23 +251,51 @@ async function loadPositions() {
   if (priceRow) {
     const cls = signCls(priceRow.unrealizedUsd);
     posPnl.className = "pos-pnl " + cls;
-    posPnl.textContent = `${priceRow.unrealizedUsd >= 0 ? "+" : ""}${fmtUsd(priceRow.unrealizedUsd)} (${fmtNum(priceRow.unrealizedPct)}%)`;
-  } else {
-    posPnl.textContent = "";
-  }
+    posPnl.textContent = `浮动 ${signStr(priceRow.unrealizedUsd)}${fmtUsd(priceRow.unrealizedUsd)} (${fmtNum(priceRow.unrealizedPct)}%)` +
+      (priceRow.realizedUsd ? ` · 已实现 ${signStr(priceRow.realizedUsd)}${fmtUsd(priceRow.realizedUsd)}` : "");
+  } else posPnl.textContent = "";
   renderTotals(pnlRes.totals);
 }
 
+function mkBtn(cls, text, onClick, title) {
+  const b = document.createElement("button");
+  b.className = cls; b.textContent = text; if (title) b.title = title;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
 function renderTotals(totals) {
-  const usd = totals.unrealizedUsd || 0;
+  const usd = totals.unrealizedUsd || 0, rz = totals.realizedUsd || 0;
   const el = $("totalPnl");
   el.className = "totals-value " + signCls(usd);
-  el.textContent = `${usd >= 0 ? "+" : ""}${fmtUsd(usd)} (${fmtNum(totals.unrealizedPct || 0)}%)`;
-
-  const rz = totals.realizedUsd || 0;
+  el.textContent = `${signStr(usd)}${fmtUsd(usd)}`;
   const rel = $("totalRealized");
   rel.className = "totals-value " + signCls(rz);
-  rel.textContent = `${rz >= 0 ? "+" : ""}${fmtUsd(rz)}`;
+  rel.textContent = `${signStr(rz)}${fmtUsd(rz)}`;
+}
+
+async function loadPnl() {
+  const pnlRes = await fetch("/api/pnl").then((r) => r.json());
+  renderTotals(pnlRes.totals);
+}
+
+$("posForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.selected) { alert("请先在左侧选择一只股票"); return; }
+  const f = e.target;
+  const res = await fetch("/api/positions", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol: state.selected, quantity: parseFloat(f.quantity.value), buyPrice: parseFloat(f.buyPrice.value), buyTime: f.buyTime.value, note: f.note.value }),
+  });
+  if (!res.ok) { const err = await res.json().catch(() => ({})); alert(err.error || "记录失败"); return; }
+  f.quantity.value = ""; f.buyPrice.value = ""; f.note.value = "";
+  await loadPositions();
+});
+
+async function deletePosition(id) {
+  if (!confirm("删除这条记录？")) return;
+  await fetch(`/api/positions/${id}`, { method: "DELETE" });
+  await loadPositions();
 }
 
 // ---------- 卖出弹窗 ----------
@@ -284,7 +304,7 @@ function openSellModal(p, lastPrice) {
   sellingId = p.id;
   $("sellModalSym").textContent = p.symbol;
   $("sellModalInfo").textContent = `买入 ${fmtNum(p.quantity, 4)} 股 @ $${fmtNum(p.buyPrice)}（${p.buyTime}）`;
-  $("sellPriceInput").value = lastPrice ? lastPrice.toFixed(2) : p.buyPrice.toFixed(2);
+  $("sellPriceInput").value = (lastPrice || p.buyPrice).toFixed(2);
   $("sellTimeInput").value = new Date().toISOString().slice(0, 10);
   $("sellModal").hidden = false;
 }
@@ -293,99 +313,52 @@ $("sellCancel").addEventListener("click", closeSellModal);
 $("sellModal").addEventListener("click", (e) => { if (e.target.id === "sellModal") closeSellModal(); });
 $("sellConfirm").addEventListener("click", async () => {
   if (sellingId == null) return;
-  const price = parseFloat($("sellPriceInput").value);
-  const time = $("sellTimeInput").value;
+  const price = parseFloat($("sellPriceInput").value), time = $("sellTimeInput").value;
   if (isNaN(price) || price < 0 || !time) { alert("请填写有效的卖出价与时间"); return; }
   const res = await fetch(`/api/positions/${sellingId}/sell`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sellPrice: price, sellTime: time }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sellPrice: price, sellTime: time }),
   });
   if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "卖出失败"); return; }
   closeSellModal();
   await loadPositions();
-  await loadStats();
 }
-
+);
 async function undoSell(id) {
   if (!confirm("撤销这笔卖出，改回持仓？")) return;
-  await fetch(`/api/positions/${id}/sell`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sellTime: "" }),
-  });
+  await fetch(`/api/positions/${id}/sell`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sellTime: "" }) });
   await loadPositions();
-  await loadStats();
 }
 
-// ---------- 已实现盈亏统计（周/月） ----------
-let statsData = { weekly: [], monthly: [] };
-let statsPeriod = "monthly";
+// ---------- 策略列表（右侧） ----------
+const sigBadge = { 1: ["买入", "up"], "-1": ["卖出", "down"], 0: ["观望", "flat"] };
 
-async function loadStats() {
-  statsData = await fetch("/api/stats").then((r) => r.json());
-  renderStats();
-}
-
-function renderStats() {
-  const rows = statsData[statsPeriod] || [];
-  const tbody = $("statRows");
-  tbody.innerHTML = "";
-  $("statEmpty").hidden = rows.length > 0;
-  for (const s of rows) {
-    const cls = signCls(s.realizedUsd);
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${s.label}</td>
-      <td class="num ${cls}">${s.realizedUsd >= 0 ? "+" : ""}${fmtUsd(s.realizedUsd)}</td>
-      <td class="num flat">${s.trades}</td>
-      <td class="num flat">${s.wins}</td>
-      <td class="num">${fmtNum(s.winRate)}%</td>`;
-    tbody.appendChild(tr);
-  }
-}
-
-document.querySelectorAll(".stats-tabs .tab").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".stats-tabs .tab").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    statsPeriod = btn.dataset.period;
-    renderStats();
+async function loadStrategyList() {
+  const sym = state.selected || "";
+  state.strategies = await fetch(`/api/strategies?symbol=${encodeURIComponent(sym)}`).then((r) => r.json());
+  const ul = $("stratList");
+  ul.innerHTML = "";
+  state.strategies.forEach((s, i) => {
+    const [label, cls] = sigBadge[s.currentSignal] || sigBadge[0];
+    const li = document.createElement("li");
+    li.className = "strat-li" + (s.key === state.selectedStrategy ? " active" : "");
+    li.innerHTML = `
+      <div class="strat-li-head">
+        <span class="strat-rank">${i + 1}</span>
+        <span class="strat-li-name">${s.name}</span>
+        <span class="sig-badge ${cls}">${label}</span>
+      </div>
+      <div class="strat-li-meta">胜率 ${s.trades ? fmtNum(s.winRate) + "%" : "—"} · ${s.trades} 笔 · 累计 ${signStr(s.totalReturn)}${fmtNum(s.totalReturn)}%</div>`;
+    li.addEventListener("click", () => {
+      state.selectedStrategy = state.selectedStrategy === s.key ? null : s.key;
+      loadStrategyList();
+      applyMarkers();
+    });
+    ul.appendChild(li);
   });
-});
-
-async function loadPnl() {
-  const pnlRes = await fetch("/api/pnl").then((r) => r.json());
-  currentPnl = pnlRes;
-  renderTotals(pnlRes.totals);
-}
-
-$("posForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!state.selected) { alert("请先在左侧选择一只股票"); return; }
-  const f = e.target;
-  const body = {
-    symbol: state.selected,
-    quantity: parseFloat(f.quantity.value),
-    buyPrice: parseFloat(f.buyPrice.value),
-    buyTime: f.buyTime.value,
-    note: f.note.value,
-  };
-  const res = await fetch("/api/positions", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  if (!res.ok) { const err = await res.json().catch(() => ({})); alert(err.error || "记录失败"); return; }
-  f.quantity.value = ""; f.buyPrice.value = ""; f.note.value = "";
-  await loadPositions();
-});
-
-async function deletePosition(id) {
-  if (!confirm("删除这条买入记录？")) return;
-  await fetch(`/api/positions/${id}`, { method: "DELETE" });
-  await loadPositions();
 }
 
 // ---------- 提醒 ----------
-const kindLabel = { golden_cross: "金叉·买", death_cross: "死叉·卖", overbought: "超买", oversold: "超卖" };
-
+const kindLabel = { consensus_buy: "共振·买", consensus_sell: "共振·卖", golden_cross: "金叉", death_cross: "死叉", overbought: "超买", oversold: "超卖" };
 async function loadAlerts() {
   const alerts = await fetch("/api/alerts").then((r) => r.json());
   const ul = $("alertList");
@@ -397,34 +370,169 @@ async function loadAlerts() {
     li.innerHTML = `
       <span class="alert-kind k-${a.kind}">${kindLabel[a.kind] || a.kind}</span>
       <div class="alert-msg">${a.message}</div>
-      <div class="alert-meta">
-        <span>${new Date(a.createdAt).toLocaleString("zh-CN")}</span>
-        ${a.acknowledged ? "" : `<button class="alert-ack-btn">已读</button>`}
-      </div>`;
+      <div class="alert-meta"><span>${new Date(a.createdAt).toLocaleString("zh-CN")}</span>
+        ${a.acknowledged ? "" : `<button class="alert-ack-btn">已读</button>`}</div>`;
     const btn = li.querySelector(".alert-ack-btn");
     if (btn) btn.addEventListener("click", async () => { await fetch(`/api/alerts/${a.id}/ack`, { method: "POST" }); loadAlerts(); });
     li.querySelector(".alert-msg").addEventListener("click", () => {
-      if (state.symbols.find((s) => s.symbol === a.symbol)) selectSymbol(a.symbol);
+      if (state.symbols.find((s) => s.symbol === a.symbol)) { showView("trade"); selectSymbol(a.symbol); }
     });
     ul.appendChild(li);
   }
 }
 
+// ---------- 收益视图 ----------
+async function loadReturns() {
+  const [pnl, stats] = await Promise.all([
+    fetch("/api/pnl").then((r) => r.json()),
+    fetch("/api/stats").then((r) => r.json()),
+  ]);
+  const t = pnl.totals;
+  const total = (t.unrealizedUsd || 0) + (t.realizedUsd || 0);
+  setCard("rCardUnrl", t.unrealizedUsd || 0, true);
+  setCard("rCardReal", t.realizedUsd || 0, true);
+  setCard("rCardTotal", total, true);
+  $("rCardMV").textContent = fmtUsd(t.marketValue || 0);
+
+  const tbody = $("returnsRows");
+  tbody.innerHTML = "";
+  $("returnsEmpty").hidden = pnl.rows.length > 0;
+  for (const r of pnl.rows) {
+    const combined = r.unrealizedUsd + r.realizedUsd;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="sym">${r.symbol}</td>
+      <td class="num">${fmtNum(r.quantity, 4)}</td>
+      <td class="num">${r.avgCost ? fmtNum(r.avgCost) : "—"}</td>
+      <td class="num">${r.lastPrice ? fmtNum(r.lastPrice) : "—"}</td>
+      <td class="num ${signCls(r.unrealizedUsd)}">${signStr(r.unrealizedUsd)}${fmtUsd(r.unrealizedUsd)}</td>
+      <td class="num ${signCls(r.realizedUsd)}">${signStr(r.realizedUsd)}${fmtUsd(r.realizedUsd)}</td>
+      <td class="num ${signCls(combined)}">${signStr(combined)}${fmtUsd(combined)}</td>`;
+    tbody.appendChild(tr);
+  }
+  renderPeriodTable("monthlyRows", "monthlyEmpty", stats.monthly);
+  renderPeriodTable("weeklyRows", "weeklyEmpty", stats.weekly);
+}
+
+function setCard(id, v, color) {
+  const el = $(id);
+  el.className = "card-value " + (color ? signCls(v) : "");
+  el.textContent = `${signStr(v)}${fmtUsd(v)}`;
+}
+
+function renderPeriodTable(rowsId, emptyId, rows) {
+  rows = rows || [];
+  const tbody = $(rowsId);
+  tbody.innerHTML = "";
+  $(emptyId).hidden = rows.length > 0;
+  for (const s of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${s.label}</td>
+      <td class="num ${signCls(s.realizedUsd)}">${signStr(s.realizedUsd)}${fmtUsd(s.realizedUsd)}</td>
+      <td class="num flat">${s.trades}</td>
+      <td class="num">${fmtNum(s.winRate)}%</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+// ---------- 记录视图 ----------
+let allRecords = [];
+$("recFilter").addEventListener("input", renderRecords);
+
+async function loadRecords() {
+  allRecords = await fetch("/api/positions").then((r) => r.json());
+  renderRecords();
+}
+
+function renderRecords() {
+  const filter = $("recFilter").value.trim().toUpperCase();
+  const rows = allRecords.filter((p) => !filter || p.symbol.includes(filter));
+  const priceOf = {};
+  state.symbols.forEach((s) => (priceOf[s.symbol] = s.lastPrice));
+  const tbody = $("recordRows");
+  tbody.innerHTML = "";
+  $("recordEmpty").hidden = rows.length > 0;
+  for (const p of rows) {
+    const closed = !!p.sellTime;
+    const exit = closed ? p.sellPrice : (priceOf[p.symbol] || 0);
+    const pnl = (exit - p.buyPrice) * p.quantity;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="sym">${p.symbol}</td>
+      <td class="num">${fmtNum(p.quantity, 4)}</td>
+      <td class="num">${fmtNum(p.buyPrice)}</td>
+      <td>${p.buyTime}</td>
+      <td class="num">${closed ? fmtNum(p.sellPrice) : "—"}</td>
+      <td>${closed ? p.sellTime : '<span class="flat">持仓中</span>'}</td>
+      <td>${p.note || ""}</td>
+      <td class="num ${signCls(pnl)}">${signStr(pnl)}${fmtUsd(pnl)}${closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
+      <td class="rec-actions"></td>`;
+    const act = tr.querySelector(".rec-actions");
+    act.appendChild(mkBtn("pos-link", "编辑", () => openEdit(p)));
+    act.appendChild(mkBtn("pos-del", "✕", () => deleteRecord(p.id), "删除"));
+    tbody.appendChild(tr);
+  }
+}
+
+async function deleteRecord(id) {
+  if (!confirm("删除这条记录？盈亏统计将自动更新。")) return;
+  await fetch(`/api/positions/${id}`, { method: "DELETE" });
+  await loadRecords();
+  await loadPnl();
+}
+
+// ---------- 编辑弹窗 ----------
+let editingId = null;
+function openEdit(p) {
+  editingId = p.id;
+  $("editSymbol").value = p.symbol;
+  $("editQty").value = p.quantity;
+  $("editBuyPrice").value = p.buyPrice;
+  $("editBuyTime").value = p.buyTime ? p.buyTime.slice(0, 10) : "";
+  $("editSellPrice").value = p.sellPrice || "";
+  $("editSellTime").value = p.sellTime ? p.sellTime.slice(0, 10) : "";
+  $("editNote").value = p.note || "";
+  $("editModal").hidden = false;
+}
+function closeEdit() { $("editModal").hidden = true; editingId = null; }
+$("editCancel").addEventListener("click", closeEdit);
+$("editModal").addEventListener("click", (e) => { if (e.target.id === "editModal") closeEdit(); });
+$("editConfirm").addEventListener("click", async () => {
+  if (editingId == null) return;
+  const body = {
+    symbol: $("editSymbol").value.trim().toUpperCase(),
+    quantity: parseFloat($("editQty").value),
+    buyPrice: parseFloat($("editBuyPrice").value),
+    buyTime: $("editBuyTime").value,
+    sellPrice: parseFloat($("editSellPrice").value) || 0,
+    sellTime: $("editSellTime").value,
+    note: $("editNote").value,
+  };
+  if (!body.symbol || !(body.quantity > 0) || !(body.buyPrice >= 0)) { alert("代码/数量/买入价不合法"); return; }
+  const res = await fetch(`/api/positions/${editingId}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "保存失败"); return; }
+  closeEdit();
+  await loadRecords();
+  await loadPnl();
+}
+);
+
 // ---------- 刷新 & 轮询 ----------
-$("refreshBtn").addEventListener("click", async () => {
-  await fetch("/api/refresh", { method: "POST" });
-  await refreshLive();
-});
+$("refreshBtn").addEventListener("click", async () => { await fetch("/api/refresh", { method: "POST" }); await refreshLive(); });
 
 async function refreshLive() {
   await loadSymbols();
   await loadPnl();
   await loadAlerts();
-  await loadStats();
-  if (state.selected) { updateChartHead(); await loadStrategies(); }
+  if (state.selected) { updateChartHead(); await loadStrategyList(); }
+  if (!$("view-returns").hidden) loadReturns();
+  if (!$("view-records").hidden) loadRecords();
 }
 
 // ---------- 启动 ----------
 initChart();
-loadSymbols().then(() => { loadPnl(); loadAlerts(); loadStats(); });
+loadSymbols().then(() => { loadPnl(); loadAlerts(); });
 setInterval(refreshLive, 30000);
