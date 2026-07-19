@@ -45,6 +45,8 @@ func openDB(path string) (*sql.DB, error) {
 			quantity   REAL NOT NULL,
 			buy_price  REAL NOT NULL,
 			buy_time   TEXT NOT NULL,
+			sell_price REAL NOT NULL DEFAULT 0,
+			sell_time  TEXT NOT NULL DEFAULT '',
 			note       TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL
 		);`,
@@ -67,7 +69,37 @@ func openDB(path string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
+	// 对已有旧库补充 sell 字段（SQLite 无 ADD COLUMN IF NOT EXISTS）。
+	if err := ensureColumn(db, "positions", "sell_price", "REAL NOT NULL DEFAULT 0"); err != nil {
+		return nil, err
+	}
+	if err := ensureColumn(db, "positions", "sell_time", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return nil, err
+	}
 	return db, nil
+}
+
+// ensureColumn 在列不存在时追加，用于向后兼容旧数据库。
+func ensureColumn(db *sql.DB, table, col, def string) error {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == col {
+			return nil // 已存在
+		}
+	}
+	_, err = db.Exec("ALTER TABLE " + table + " ADD COLUMN " + col + " " + def)
+	return err
 }
 
 // ---------- symbols ----------
@@ -213,8 +245,21 @@ type Position struct {
 	Quantity  float64 `json:"quantity"`
 	BuyPrice  float64 `json:"buyPrice"`
 	BuyTime   string  `json:"buyTime"`
+	SellPrice float64 `json:"sellPrice"` // 0 表示未卖出
+	SellTime  string  `json:"sellTime"`  // 空表示未卖出（持仓中）
 	Note      string  `json:"note"`
 	CreatedAt string  `json:"createdAt"`
+}
+
+// Closed 表示该笔已卖出（已实现盈亏）。
+func (p Position) Closed() bool { return p.SellTime != "" }
+
+// RealizedPnL 返回已实现盈亏（未卖出返回 0）。
+func (p Position) RealizedPnL() float64 {
+	if !p.Closed() {
+		return 0
+	}
+	return (p.SellPrice - p.BuyPrice) * p.Quantity
 }
 
 func addPosition(db *sql.DB, p Position) (int64, error) {
@@ -230,7 +275,7 @@ func addPosition(db *sql.DB, p Position) (int64, error) {
 }
 
 func listPositions(db *sql.DB) ([]Position, error) {
-	rows, err := db.Query(`SELECT id, symbol, quantity, buy_price, buy_time, note, created_at
+	rows, err := db.Query(`SELECT id, symbol, quantity, buy_price, buy_time, sell_price, sell_time, note, created_at
 		FROM positions ORDER BY symbol, buy_time`)
 	if err != nil {
 		return nil, err
@@ -239,12 +284,20 @@ func listPositions(db *sql.DB) ([]Position, error) {
 	out := []Position{}
 	for rows.Next() {
 		var p Position
-		if err := rows.Scan(&p.ID, &p.Symbol, &p.Quantity, &p.BuyPrice, &p.BuyTime, &p.Note, &p.CreatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.Symbol, &p.Quantity, &p.BuyPrice, &p.BuyTime,
+			&p.SellPrice, &p.SellTime, &p.Note, &p.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// sellPosition 记录某笔买入的卖出价与卖出时间（sellTime 为空则撤销卖出，改回持仓）。
+func sellPosition(db *sql.DB, id int64, sellPrice float64, sellTime string) error {
+	_, err := db.Exec(`UPDATE positions SET sell_price = ?, sell_time = ? WHERE id = ?`,
+		sellPrice, sellTime, id)
+	return err
 }
 
 func deletePosition(db *sql.DB, id int64) error {

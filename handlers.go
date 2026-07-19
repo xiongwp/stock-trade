@@ -134,14 +134,46 @@ func (h *api) positions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// DELETE /api/positions/{id}
+// DELETE /api/positions/{id}  ·  POST /api/positions/{id}/sell
 func (h *api) position(w http.ResponseWriter, r *http.Request) {
-	idStr := strings.TrimPrefix(r.URL.Path, "/api/positions/")
+	rest := strings.TrimPrefix(r.URL.Path, "/api/positions/")
+	isSell := strings.HasSuffix(rest, "/sell")
+	idStr := strings.TrimSuffix(rest, "/sell")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "无效的 id")
 		return
 	}
+
+	if isSell {
+		if r.Method != http.MethodPost {
+			writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
+			return
+		}
+		var req struct {
+			SellPrice float64 `json:"sellPrice"`
+			SellTime  string  `json:"sellTime"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeErr(w, http.StatusBadRequest, "无效的请求体")
+			return
+		}
+		// sellTime 为空表示撤销卖出（改回持仓）；非空则必须校验价格。
+		if req.SellTime != "" && req.SellPrice < 0 {
+			writeErr(w, http.StatusBadRequest, "卖出价不合法")
+			return
+		}
+		if req.SellTime == "" {
+			req.SellPrice = 0
+		}
+		if err := sellPosition(h.svc.db, id, req.SellPrice, req.SellTime); err != nil {
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		return
+	}
+
 	if r.Method != http.MethodDelete {
 		writeErr(w, http.StatusMethodNotAllowed, "不支持的方法")
 		return
@@ -153,19 +185,20 @@ func (h *api) position(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// PnLRow 是按股票聚合后的盈亏。
+// PnLRow 是按股票聚合后的盈亏（持仓中用最新价算浮动盈亏，已卖出算已实现盈亏）。
 type PnLRow struct {
 	Symbol        string  `json:"symbol"`
-	Quantity      float64 `json:"quantity"`
-	AvgCost       float64 `json:"avgCost"`
+	Quantity      float64 `json:"quantity"`      // 当前持仓数量（未卖出）
+	AvgCost       float64 `json:"avgCost"`       // 持仓均价
 	LastPrice     float64 `json:"lastPrice"`
-	CostBasis     float64 `json:"costBasis"`
-	MarketValue   float64 `json:"marketValue"`
-	UnrealizedUSD float64 `json:"unrealizedUsd"`
+	CostBasis     float64 `json:"costBasis"`     // 持仓成本
+	MarketValue   float64 `json:"marketValue"`   // 持仓市值
+	UnrealizedUSD float64 `json:"unrealizedUsd"` // 浮动盈亏
 	UnrealizedPct float64 `json:"unrealizedPct"`
+	RealizedUSD   float64 `json:"realizedUsd"`   // 已实现盈亏（该股票所有已卖出笔）
 }
 
-// GET /api/pnl —— 按股票聚合持仓，用最新价算美金盈亏。
+// GET /api/pnl —— 按股票聚合：持仓算浮动盈亏，已卖出算已实现盈亏。
 func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 	positions, err := listPositions(h.svc.db)
 	if err != nil {
@@ -191,12 +224,16 @@ func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 			agg[p.Symbol] = row
 			order = append(order, p.Symbol)
 		}
-		row.Quantity += p.Quantity
-		row.CostBasis += p.Quantity * p.BuyPrice
+		if p.Closed() {
+			row.RealizedUSD += p.RealizedPnL()
+		} else {
+			row.Quantity += p.Quantity
+			row.CostBasis += p.Quantity * p.BuyPrice
+		}
 	}
 
 	rows := []PnLRow{}
-	var totalCost, totalMV float64
+	var totalCost, totalMV, totalRealized float64
 	for _, sym := range order {
 		row := agg[sym]
 		if row.Quantity > 0 {
@@ -209,6 +246,7 @@ func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 		}
 		totalCost += row.CostBasis
 		totalMV += row.MarketValue
+		totalRealized += row.RealizedUSD
 		rows = append(rows, *row)
 	}
 
@@ -224,8 +262,86 @@ func (h *api) pnl(w http.ResponseWriter, r *http.Request) {
 			"marketValue":   totalMV,
 			"unrealizedUsd": totalPnL,
 			"unrealizedPct": totalPct,
+			"realizedUsd":   totalRealized,
 		},
 	})
+}
+
+// PeriodStat 是某个周期（周/月）的已实现盈亏统计。
+type PeriodStat struct {
+	Period      string  `json:"period"`      // 周: 2026-W29；月: 2026-07
+	Label       string  `json:"label"`       // 展示用中文标签
+	RealizedUSD float64 `json:"realizedUsd"` // 该周期已实现盈亏（按卖出时间归属）
+	Trades      int     `json:"trades"`      // 该周期卖出笔数
+	Wins        int     `json:"wins"`        // 其中盈利笔数
+	WinRate     float64 `json:"winRate"`
+}
+
+// parseDay 宽松解析日期/时间字符串。
+func parseDay(s string) (time.Time, bool) {
+	for _, layout := range []string{"2006-01-02", time.RFC3339, "2006-01-02T15:04", "2006-01-02 15:04:05"} {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
+// GET /api/stats —— 已实现盈亏按周 / 按月统计。
+func (h *api) stats(w http.ResponseWriter, r *http.Request) {
+	positions, err := listPositions(h.svc.db)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	weekly := map[string]*PeriodStat{}
+	monthly := map[string]*PeriodStat{}
+	for _, p := range positions {
+		if !p.Closed() {
+			continue
+		}
+		t, ok := parseDay(p.SellTime)
+		if !ok {
+			continue
+		}
+		pnl := p.RealizedPnL()
+
+		iy, iw := t.ISOWeek()
+		wk := fmt.Sprintf("%d-W%02d", iy, iw)
+		accumulate(weekly, wk, fmt.Sprintf("%d 年第 %d 周", iy, iw), pnl)
+
+		mk := t.Format("2006-01")
+		accumulate(monthly, mk, fmt.Sprintf("%d 年 %d 月", t.Year(), int(t.Month())), pnl)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"weekly":  sortedStats(weekly),
+		"monthly": sortedStats(monthly),
+	})
+}
+
+func accumulate(m map[string]*PeriodStat, key, label string, pnl float64) {
+	s, ok := m[key]
+	if !ok {
+		s = &PeriodStat{Period: key, Label: label}
+		m[key] = s
+	}
+	s.RealizedUSD += pnl
+	s.Trades++
+	if pnl > 0 {
+		s.Wins++
+	}
+}
+
+func sortedStats(m map[string]*PeriodStat) []PeriodStat {
+	out := make([]PeriodStat, 0, len(m))
+	for _, s := range m {
+		if s.Trades > 0 {
+			s.WinRate = float64(s.Wins) / float64(s.Trades) * 100
+		}
+		out = append(out, *s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Period > out[j].Period }) // 最近在前
+	return out
 }
 
 // GET /api/alerts
