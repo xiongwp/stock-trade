@@ -28,22 +28,24 @@
    或用环境变量 `APCA_API_KEY_ID` / `APCA_API_SECRET_KEY`（可选 `APCA_FEED=iex`）。
    免费账户用 `iex` 数据源。
 
-## 运行
+## 安装 / 运行
 
-**手动运行：**
+**方式一：一键安装（推荐）**
+
+在 Finder 里双击 **`安装.command`** —— 会自动检测 Go、（首次）引导填入 Alpaca 密钥、编译、设为开机自启并启动，最后打印本机 / 主机名 / 手机同 WiFi 三个访问地址。
+卸载：双击 **`卸载.command`**（保留本地数据与密钥）。
+
+> 若双击提示「无法打开（未验证的开发者）」，右键点该文件 → 打开 → 打开；或在终端 `bash 安装.command`。
+
+**方式二：命令行**
 ```bash
-go run .            # 或 go build -o stocktrade . && ./stocktrade
+go run .                            # 前台运行
+# 或开机自启：
+./scripts/install-autostart.sh      # 安装 LaunchAgent
+./scripts/uninstall-autostart.sh    # 卸载
 ```
 
-**开机自启（macOS，24 小时运行）：**
-```bash
-./scripts/install-autostart.sh     # 安装 LaunchAgent，登录即启动、崩溃自动重启
-./scripts/uninstall-autostart.sh   # 卸载
-launchctl list | grep com.stocktrade.server   # 查看状态
-tail -f server.log                             # 查看日志
-```
-
-打开 http://localhost:9010
+服务监听 `0.0.0.0:9010`：本机开 http://localhost:9010 ，同一 WiFi 的手机开 `http://<主机名>.local:9010` 或 `http://<局域网IP>:9010`（页面顶栏和启动日志都会显示这些地址）。
 
 ## 测试
 
