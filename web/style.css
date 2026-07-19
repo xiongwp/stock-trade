@@ -175,6 +175,16 @@ h2 { font-size: 14px; margin: 0 0 8px; }
 .pos-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .pos-del:hover { color: var(--up); }
 
+/* 做多/做空切换 & 方向标签 */
+.side-toggle { display: inline-flex; gap: 0; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.side-btn { background: var(--panel2); border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 6px 14px; }
+.side-btn.active[data-side="long"] { background: var(--up); color: #fff; }
+.side-btn.active[data-side="short"] { background: var(--down); color: #fff; }
+.side-badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 4px; }
+.side-badge.long { background: rgba(239,68,68,.18); color: var(--up); }
+.side-badge.short { background: rgba(34,197,94,.18); color: var(--down); }
+#editSide { width: 100%; background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; color: var(--text); font-size: 14px; }
+
 /* 持仓操作 & 卖出弹窗 */
 .pos-actions { white-space: nowrap; }
 .pos-link { background: none; border: 1px solid var(--border); color: var(--accent); cursor: pointer; font-size: 12px; padding: 2px 8px; border-radius: 4px; margin-right: 4px; }

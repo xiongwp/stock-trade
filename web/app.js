@@ -325,13 +325,17 @@ async function deletePosition(id) {
   await loadPositions();
 }
 
-// ---------- 卖出弹窗 ----------
+// ---------- 平仓弹窗 ----------
 let sellingId = null;
 function openSellModal(p, lastPrice) {
   sellingId = p.id;
-  $("sellModalSym").textContent = p.symbol;
-  $("sellModalInfo").textContent = `买入 ${fmtNum(p.quantity, 4)} 股 @ $${fmtNum(p.buyPrice)}（${p.buyTime}）`;
-  $("sellPriceInput").value = (lastPrice || p.buyPrice).toFixed(2);
+  const short = p.side === "short";
+  const entryPrice = short ? p.sellPrice : p.buyPrice;
+  const entryTime = short ? p.sellTime : p.buyTime;
+  $("sellModalTitle").innerHTML = `${short ? "买入平仓" : "卖出平仓"} · <span id="sellModalSym">${p.symbol}</span>`;
+  $("sellModalInfo").textContent = `${short ? "做空开仓" : "做多开仓"} ${fmtNum(p.quantity, 4)} 股 @ $${fmtNum(entryPrice)}（${entryTime}）`;
+  $("sellPriceLabel").firstChild.textContent = short ? "买入平仓单价 $" : "卖出平仓单价 $";
+  $("sellPriceInput").value = (lastPrice || entryPrice).toFixed(2);
   $("sellTimeInput").value = new Date().toISOString().slice(0, 10);
   $("sellModal").hidden = false;
 }
@@ -341,18 +345,18 @@ $("sellModal").addEventListener("click", (e) => { if (e.target.id === "sellModal
 $("sellConfirm").addEventListener("click", async () => {
   if (sellingId == null) return;
   const price = parseFloat($("sellPriceInput").value), time = $("sellTimeInput").value;
-  if (isNaN(price) || price < 0 || !time) { alert("请填写有效的卖出价与时间"); return; }
-  const res = await fetch(`/api/positions/${sellingId}/sell`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sellPrice: price, sellTime: time }),
+  if (isNaN(price) || price < 0 || !time) { alert("请填写有效的平仓价与时间"); return; }
+  const res = await fetch(`/api/positions/${sellingId}/close`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ price, time }),
   });
-  if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "卖出失败"); return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); alert(e.error || "平仓失败"); return; }
   closeSellModal();
   await loadPositions();
 }
 );
-async function undoSell(id) {
-  if (!confirm("撤销这笔卖出，改回持仓？")) return;
-  await fetch(`/api/positions/${id}/sell`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sellTime: "" }) });
+async function undoClose(id) {
+  if (!confirm("撤销平仓，改回持仓？")) return;
+  await fetch(`/api/positions/${id}/close`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ time: "" }) });
   await loadPositions();
 }
 
@@ -481,19 +485,18 @@ function renderRecords() {
   tbody.innerHTML = "";
   $("recordEmpty").hidden = rows.length > 0;
   for (const p of rows) {
-    const closed = !!p.sellTime;
-    const exit = closed ? p.sellPrice : (priceOf[p.symbol] || 0);
-    const pnl = (exit - p.buyPrice) * p.quantity;
+    const L = lotPnl(p, priceOf[p.symbol] || 0);
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="sym">${p.symbol}</td>
+      <td>${sideBadge(L.short)}</td>
       <td class="num">${fmtNum(p.quantity, 4)}</td>
-      <td class="num">${fmtNum(p.buyPrice)}</td>
-      <td>${p.buyTime}</td>
-      <td class="num">${closed ? fmtNum(p.sellPrice) : "—"}</td>
-      <td>${closed ? p.sellTime : '<span class="flat">持仓中</span>'}</td>
+      <td class="num">${p.buyTime ? fmtNum(p.buyPrice) : "—"}</td>
+      <td>${p.buyTime || '<span class="flat">—</span>'}</td>
+      <td class="num">${p.sellTime ? fmtNum(p.sellPrice) : "—"}</td>
+      <td>${p.sellTime || '<span class="flat">—</span>'}</td>
       <td>${p.note || ""}</td>
-      <td class="num ${signCls(pnl)}">${signStr(pnl)}${fmtUsd(pnl)}${closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
+      <td class="num ${signCls(L.pnl)}">${signStr(L.pnl)}${fmtUsd(L.pnl)}${L.closed ? "" : ' <span class="flat" style="font-size:10px">浮</span>'}</td>
       <td class="rec-actions"></td>`;
     const act = tr.querySelector(".rec-actions");
     act.appendChild(mkBtn("pos-link", "编辑", () => openEdit(p)));
@@ -514,6 +517,7 @@ let editingId = null;
 function openEdit(p) {
   editingId = p.id;
   $("editSymbol").value = p.symbol;
+  $("editSide").value = p.side === "short" ? "short" : "long";
   $("editQty").value = p.quantity;
   $("editBuyPrice").value = p.buyPrice;
   $("editBuyTime").value = p.buyTime ? p.buyTime.slice(0, 10) : "";
@@ -529,14 +533,15 @@ $("editConfirm").addEventListener("click", async () => {
   if (editingId == null) return;
   const body = {
     symbol: $("editSymbol").value.trim().toUpperCase(),
+    side: $("editSide").value,
     quantity: parseFloat($("editQty").value),
-    buyPrice: parseFloat($("editBuyPrice").value),
+    buyPrice: parseFloat($("editBuyPrice").value) || 0,
     buyTime: $("editBuyTime").value,
     sellPrice: parseFloat($("editSellPrice").value) || 0,
     sellTime: $("editSellTime").value,
     note: $("editNote").value,
   };
-  if (!body.symbol || !(body.quantity > 0) || !(body.buyPrice >= 0)) { alert("代码/数量/买入价不合法"); return; }
+  if (!body.symbol || !(body.quantity > 0)) { alert("代码/数量不合法"); return; }
   const res = await fetch(`/api/positions/${editingId}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
