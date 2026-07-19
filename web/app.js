@@ -576,6 +576,25 @@ async function loadServerInfo() {
     addrs.map((a) => `${a.label}\n${a.url}`).join("\n\n"));
 }
 
+// 美股交易时段（美东时间）：盘前/盘中/盘后/休市
+function renderMarketSession() {
+  const el = $("marketSession");
+  if (!el) return;
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+  const get = (t) => parts.find((p) => p.type === t).value;
+  const wd = get("weekday");
+  let hh = parseInt(get("hour"), 10); if (hh === 24) hh = 0;
+  const mins = hh * 60 + parseInt(get("minute"), 10);
+  let label = "休市", cls = "flat";
+  if (wd === "Sat" || wd === "Sun") { label = "休市·周末"; }
+  else if (mins >= 240 && mins < 570) { label = "盘前"; cls = "pre"; }
+  else if (mins >= 570 && mins < 960) { label = "盘中"; cls = "live"; }
+  else if (mins >= 960 && mins < 1200) { label = "盘后"; cls = "post"; }
+  else { label = "休市·夜间"; }
+  el.className = "mkt-session " + cls;
+  el.textContent = "● " + label;
+}
+
 async function loadVersion() {
   try {
     const v = await fetch("/api/version").then((r) => r.json());
@@ -587,5 +606,7 @@ async function loadVersion() {
 initChart();
 loadVersion();
 loadServerInfo();
-loadSymbols().then(() => { loadPnl(); loadAlerts(); });
+renderMarketSession();
+setInterval(renderMarketSession, 30000);
+loadSymbols().then(() => { loadPnl(); loadAlerts(); loadStats(); });
 setInterval(refreshLive, 30000);

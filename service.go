@@ -367,22 +367,19 @@ type StrategyStat struct {
 	SymbolTrades  int     `json:"symbolTrades"`
 }
 
-// StrategyStats 对全部自选股回测每个策略并按胜率排名，
-// 同时给出对 focusSymbol 的当前信号与该股票上的胜率。
-func (s *Service) StrategyStats(focusSymbol string) ([]StrategyStat, error) {
-	names, err := listSymbolNames(s.db)
-	if err != nil {
-		return nil, err
+// strategyAggregate 计算「全自选股聚合」的策略排行（与所选股票无关的重计算部分），缓存 60 秒。
+// 50 个策略 × 上百只股票的回测较重，缓存后 /api/strategies 频繁调用也很轻。
+func (s *Service) strategyAggregate() []StrategyStat {
+	s.statMu.Lock()
+	defer s.statMu.Unlock()
+	if s.statCache != nil && time.Since(s.statAt) < 60*time.Second {
+		return s.statCache
 	}
-	// 预取各股票的 K 线与最新价。
+
+	names, _ := listSymbolNames(s.db)
 	barsBy := map[string][]BarRow{}
-	priceBy := map[string]float64{}
-	syms, _ := listSymbols(s.db)
-	for _, sy := range syms {
-		priceBy[sy.Symbol] = sy.LastPrice
-	}
 	for _, n := range names {
-		if b, err := getBars(s.db, n); err == nil {
+		if b, err := getBars(s.db, n); err == nil && len(b) >= 61 {
 			barsBy[n] = b
 		}
 	}
@@ -390,25 +387,15 @@ func (s *Service) StrategyStats(focusSymbol string) ([]StrategyStat, error) {
 	var stats []StrategyStat
 	for _, strat := range strategies() {
 		st := StrategyStat{Key: strat.Key, Name: strat.Name, Desc: strat.Desc}
-		var totWins, totTrades int
+		var totWins, totTrades, symCount int
 		var wRetSum, totalRetSum float64
-		var symCount int
-		for _, n := range names {
-			bars := barsBy[n]
-			if len(bars) < 61 {
-				continue
-			}
+		for _, bars := range barsBy {
 			bt := backtest(bars, strat.Signals(bars))
 			totWins += bt.Wins
 			totTrades += bt.Trades
 			wRetSum += bt.AvgReturn * float64(bt.Trades)
 			totalRetSum += bt.TotalReturn
 			symCount++
-			if n == focusSymbol {
-				st.CurrentSignal = currentSignal(strat, bars, priceBy[n])
-				st.SymbolWinRate = bt.WinRate
-				st.SymbolTrades = bt.Trades
-			}
 		}
 		st.Trades = totTrades
 		if totTrades > 0 {
@@ -420,15 +407,51 @@ func (s *Service) StrategyStats(focusSymbol string) ([]StrategyStat, error) {
 		}
 		stats = append(stats, st)
 	}
-
-	// 按胜率降序排名（无交易的沉底）。
 	sort.SliceStable(stats, func(i, j int) bool {
 		if (stats[i].Trades == 0) != (stats[j].Trades == 0) {
 			return stats[j].Trades == 0
 		}
 		return stats[i].WinRate > stats[j].WinRate
 	})
-	return stats, nil
+
+	s.statCache = stats
+	s.statAt = time.Now()
+	return stats
+}
+
+// StrategyStats 返回胜率排行（缓存的聚合），并为 focusSymbol 填入当前信号与该股胜率（实时、廉价）。
+func (s *Service) StrategyStats(focusSymbol string) ([]StrategyStat, error) {
+	agg := s.strategyAggregate()
+	out := make([]StrategyStat, len(agg))
+	copy(out, agg)
+
+	if focusSymbol != "" {
+		bars, _ := getBars(s.db, focusSymbol)
+		if len(bars) >= 61 {
+			var price float64
+			for _, sy := range mustList(s.db) {
+				if sy.Symbol == focusSymbol {
+					price = sy.LastPrice
+					break
+				}
+			}
+			byKey := map[string]Strategy{}
+			for _, st := range strategies() {
+				byKey[st.Key] = st
+			}
+			for i := range out {
+				strat, ok := byKey[out[i].Key]
+				if !ok {
+					continue
+				}
+				out[i].CurrentSignal = currentSignal(strat, bars, price)
+				bt := backtest(bars, strat.Signals(bars))
+				out[i].SymbolWinRate = bt.WinRate
+				out[i].SymbolTrades = bt.Trades
+			}
+		}
+	}
+	return out, nil
 }
 
 func mustList(db *sql.DB) []Symbol {
