@@ -32,6 +32,7 @@ body {
   background: var(--panel);
 }
 .topbar h1 { font-size: 17px; margin: 0; white-space: nowrap; }
+.app-ver { font-size: 11px; color: var(--muted); font-weight: 400; }
 .totals { margin-left: auto; display: flex; align-items: baseline; gap: 8px; }
 .totals-label { color: var(--muted); font-size: 12px; }
 .totals-value { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }

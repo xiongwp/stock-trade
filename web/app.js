@@ -576,8 +576,16 @@ async function loadServerInfo() {
     addrs.map((a) => `${a.label}\n${a.url}`).join("\n\n"));
 }
 
+async function loadVersion() {
+  try {
+    const v = await fetch("/api/version").then((r) => r.json());
+    if (v.version) $("appVer").textContent = "v" + v.version;
+  } catch { /* 旧版本无此接口，忽略 */ }
+}
+
 // ---------- 启动 ----------
 initChart();
+loadVersion();
 loadServerInfo();
 loadSymbols().then(() => { loadPnl(); loadAlerts(); });
 setInterval(refreshLive, 30000);
