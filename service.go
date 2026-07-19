@@ -21,6 +21,10 @@ type Service struct {
 	assetsAt time.Time // 缓存时间
 
 	barCache map[string]barCacheEntry // 按 symbol|tf 缓存分钟/小时/周线（日线走数据库）
+
+	statMu    sync.Mutex     // 策略聚合排行缓存（与个股无关的重计算部分）
+	statCache []StrategyStat // 已按胜率排序的聚合结果
+	statAt    time.Time
 }
 
 type barCacheEntry struct {
