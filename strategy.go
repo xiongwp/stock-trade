@@ -17,42 +17,59 @@ func closes(bars []BarRow) []float64 {
 	return out
 }
 
+// smaSeq 计算简单均线，NaN 感知：窗口内含 NaN 处输出 NaN，不污染后续。
 func smaSeq(vals []float64, n int) []float64 {
 	out := make([]float64, len(vals))
-	sum := 0.0
-	for i := range vals {
-		sum += vals[i]
-		if i >= n {
-			sum -= vals[i-n]
+	for i := range out {
+		out[i] = math.NaN()
+	}
+	for i := n - 1; i < len(vals); i++ {
+		sum, ok := 0.0, true
+		for j := i - n + 1; j <= i; j++ {
+			if math.IsNaN(vals[j]) {
+				ok = false
+				break
+			}
+			sum += vals[j]
 		}
-		if i >= n-1 {
+		if ok {
 			out[i] = sum / float64(n)
-		} else {
-			out[i] = math.NaN()
 		}
 	}
 	return out
 }
 
+// emaSeq 计算指数均线，NaN 感知：对每段连续非 NaN 区间分别用 SMA 播种后递推。
 func emaSeq(vals []float64, n int) []float64 {
 	out := make([]float64, len(vals))
 	for i := range out {
 		out[i] = math.NaN()
 	}
-	if len(vals) < n {
-		return out
-	}
 	k := 2.0 / float64(n+1)
-	// 用前 n 个的 SMA 作为种子。
-	seed := 0.0
-	for i := 0; i < n; i++ {
-		seed += vals[i]
-	}
-	prev := seed / float64(n)
-	out[n-1] = prev
-	for i := n; i < len(vals); i++ {
-		prev = vals[i]*k + prev*(1-k)
-		out[i] = prev
+	i := 0
+	for i < len(vals) {
+		if math.IsNaN(vals[i]) {
+			i++
+			continue
+		}
+		// 找到从 i 起的连续非 NaN 区间 [i, j)。
+		j := i
+		for j < len(vals) && !math.IsNaN(vals[j]) {
+			j++
+		}
+		if j-i >= n {
+			seed := 0.0
+			for x := i; x < i+n; x++ {
+				seed += vals[x]
+			}
+			prev := seed / float64(n)
+			out[i+n-1] = prev
+			for x := i + n; x < j; x++ {
+				prev = vals[x]*k + prev*(1-k)
+				out[x] = prev
+			}
+		}
+		i = j
 	}
 	return out
 }

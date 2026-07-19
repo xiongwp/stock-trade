@@ -69,6 +69,21 @@
         </table>
         <p id="posEmpty" class="hint" hidden>该股票还没有买入记录</p>
       </section>
+
+      <section class="strategies">
+        <div class="pos-head">
+          <h2>策略胜率排行</h2>
+          <span class="hint">近 1 年回测（全部自选股聚合）· 当前信号针对 <b id="stratSymbol">—</b></span>
+        </div>
+        <table class="strat-table">
+          <thead>
+            <tr><th>#</th><th>策略</th><th class="num">胜率</th><th class="num">交易数</th>
+                <th class="num">每笔均收</th><th class="num">累计收益</th><th>当前信号</th></tr>
+          </thead>
+          <tbody id="stratRows"></tbody>
+        </table>
+        <p class="hint">胜率来自历史回测，不含手续费/滑点，非投资建议，仅供参考。</p>
+      </section>
     </main>
 
     <!-- 右：策略提醒 -->

@@ -123,6 +123,24 @@ h2 { font-size: 14px; margin: 0 0 8px; }
 .pos-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; }
 .pos-del:hover { color: var(--up); }
 
+/* 策略排行 */
+.strategies { margin-top: 22px; }
+.strat-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin: 8px 0; }
+.strat-table th, .strat-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.strat-table th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.strat-table tbody tr:last-child td { border-bottom: none; }
+.strat-table .rank { color: var(--muted); font-weight: 600; }
+.strat-table tbody tr:nth-child(1) .rank { color: #f59e0b; }
+.strat-table tbody tr:nth-child(2) .rank { color: #cbd5e1; }
+.strat-table tbody tr:nth-child(3) .rank { color: #b45309; }
+.strat-name { font-weight: 600; }
+.strat-desc { color: var(--muted); font-size: 11px; }
+.strat-wr { font-weight: 600; }
+.sig-badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+.sig-badge.up { background: rgba(239,68,68,.18); color: var(--up); }
+.sig-badge.down { background: rgba(34,197,94,.18); color: var(--down); }
+.sig-badge.flat { background: var(--panel2); color: var(--muted); }
+
 /* 提醒 */
 .alert-list { list-style: none; margin: 0; padding: 0; }
 .alert-item { padding: 9px 10px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 8px; background: var(--panel2); }

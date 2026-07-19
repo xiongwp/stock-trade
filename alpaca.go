@@ -26,24 +26,37 @@ func newAlpaca(cfg Config) *Alpaca {
 }
 
 func (a *Alpaca) do(method, rawURL string) ([]byte, error) {
-	req, err := http.NewRequest(method, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("APCA-API-KEY-ID", a.cfg.KeyID)
-	req.Header.Set("APCA-API-SECRET-KEY", a.cfg.SecretKey)
-	req.Header.Set("Accept", "application/json")
+	var lastErr error
+	// 对网络错误 / 429 / 5xx 做最多 3 次指数退避重试，提升长时间运行的韧性。
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 800 * time.Millisecond)
+		}
+		req, err := http.NewRequest(method, rawURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("APCA-API-KEY-ID", a.cfg.KeyID)
+		req.Header.Set("APCA-API-SECRET-KEY", a.cfg.SecretKey)
+		req.Header.Set("Accept", "application/json")
 
-	resp, err := a.client.Do(req)
-	if err != nil {
-		return nil, err
+		resp, err := a.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue // 网络错误，重试
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == 429 || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("alpaca %s 返回 %d: %s", rawURL, resp.StatusCode, strings.TrimSpace(string(body)))
+			continue // 限流/服务端错误，重试
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("alpaca %s 返回 %d: %s", rawURL, resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+		return body, nil
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("alpaca %s 返回 %d: %s", rawURL, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	return body, nil
+	return nil, lastErr
 }
 
 // Bar 是一根 K 线（OHLCV）。

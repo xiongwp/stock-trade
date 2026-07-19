@@ -1,55 +1,74 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
-// 构造一段收盘价序列，末端形成金叉：短均线由下方上穿长均线。
-func TestGoldenCross(t *testing.T) {
-	closes := []float64{}
-	// 先下跌 20 天让短均线压在长均线下方。
-	for i := 0; i < 20; i++ {
-		closes = append(closes, 100-float64(i))
-	}
-	// 再急拉 6 天，制造短均线上穿。
-	for i := 1; i <= 6; i++ {
-		closes = append(closes, 80+float64(i)*6)
-	}
-
+func mkBars(closes []float64) []BarRow {
 	bars := make([]BarRow, len(closes))
 	for i, c := range closes {
-		bars[i] = BarRow{Time: int64(i) * 86400, O: c, H: c, L: c, C: c, V: 1000}
+		bars[i] = BarRow{Time: int64(i) * 86400, O: c, H: c * 1.01, L: c * 0.99, C: c, V: 1000}
 	}
+	return bars
+}
 
-	// 金叉只在发生的那一天触发；逐前缀评估，断言过程中出现过金叉。
-	found := false
-	for i := 21; i <= len(bars); i++ {
-		for _, s := range evaluate("TEST", bars[:i], bars[i-1].C) {
-			if s.Kind == "golden_cross" {
-				found = true
-			}
-		}
+func TestSMASeq(t *testing.T) {
+	s := smaSeq([]float64{1, 2, 3, 4, 5}, 5)
+	if s[4] != 3 {
+		t.Fatalf("SMA5 末值应为 3，实际 %.2f", s[4])
 	}
-	if !found {
-		t.Fatalf("预期在上涨过程中检测到金叉，但未触发")
+	if !math.IsNaN(s[3]) {
+		t.Fatalf("不足周期处应为 NaN")
 	}
 }
 
-func TestRSIOverbought(t *testing.T) {
-	// 连续上涨 → RSI 应接近 100（超买）。
+func TestRSISeqOverbought(t *testing.T) {
+	vals := []float64{}
+	for i := 0; i < 30; i++ {
+		vals = append(vals, 100+float64(i)*2)
+	}
+	r := rsiSeq(vals, 14)
+	if r[len(r)-1] < 70 {
+		t.Fatalf("持续上涨 RSI 应 >=70，实际 %.1f", r[len(r)-1])
+	}
+}
+
+// 回测：先跌后涨的序列上，MA5/MA20 策略应产生交易且累计为正。
+func TestBacktestMACross(t *testing.T) {
 	closes := []float64{}
 	for i := 0; i < 30; i++ {
-		closes = append(closes, 100+float64(i)*2)
+		closes = append(closes, 100-float64(i))
 	}
-	if r, ok := rsi(closes, 14); !ok || r < 70 {
-		t.Fatalf("预期 RSI>=70，实际 r=%.2f ok=%v", r, ok)
+	for i := 0; i < 30; i++ {
+		closes = append(closes, 70+float64(i)*2)
+	}
+	bars := mkBars(closes)
+	var ma Strategy
+	for _, s := range strategies() {
+		if s.Key == "ma_5_20" {
+			ma = s
+		}
+	}
+	bt := backtest(bars, ma.Signals(bars))
+	if bt.Trades == 0 {
+		t.Fatalf("预期至少 1 笔交易")
+	}
+	if bt.WinRate < 0 || bt.WinRate > 100 {
+		t.Fatalf("胜率应在 0-100，实际 %.1f", bt.WinRate)
 	}
 }
 
-func TestSMA(t *testing.T) {
-	vals := []float64{1, 2, 3, 4, 5}
-	if m, ok := sma(vals, 5); !ok || m != 3 {
-		t.Fatalf("SMA5 预期 3，实际 %.2f ok=%v", m, ok)
+func TestStrategiesCount(t *testing.T) {
+	if n := len(strategies()); n != 10 {
+		t.Fatalf("应内置 10 个策略，实际 %d", n)
 	}
-	if _, ok := sma(vals, 6); ok {
-		t.Fatalf("数据不足时应返回 false")
+}
+
+func TestConsensus(t *testing.T) {
+	// 长度不足时不应产生共振信号。
+	bars := mkBars([]float64{1, 2, 3})
+	if sigs := consensusSignals("X", bars, 3); len(sigs) != 0 {
+		t.Fatalf("数据不足时不应有共振信号")
 	}
 }

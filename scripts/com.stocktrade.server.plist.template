@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.stocktrade.server</string>
+
+    <!-- 运行编译好的二进制 -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APPDIR__/stocktrade</string>
+    </array>
+
+    <!-- 工作目录：在此读取 config.json 并写 stock-trade.db -->
+    <key>WorkingDirectory</key>
+    <string>__APPDIR__</string>
+
+    <!-- 登录即启动 -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- 崩溃/退出后自动拉起：永不死机 -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 崩溃重启节流：至少间隔 5 秒 -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>StandardOutPath</key>
+    <string>__APPDIR__/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>__APPDIR__/server.log</string>
+</dict>
+</plist>

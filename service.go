@@ -221,6 +221,14 @@ func (s *Service) RunForever(interval time.Duration) {
 // run 是轮询主循环：每 interval 刷新报价+策略，每天补拉一次历史 K 线。
 // 单次网络错误只记录不中断，保证「永不死寂」。
 func (s *Service) run(interval time.Duration) {
+	// 启动即补拉历史 K 线（后台进行，不阻塞报价刷新）。
+	go func() {
+		for _, sym := range mustNames(s.db) {
+			if err := s.ensureBars(sym); err != nil {
+				log.Printf("启动补拉 %s K 线失败: %v", sym, err)
+			}
+		}
+	}()
 	if err := s.RefreshAll(); err != nil {
 		log.Printf("首次刷新失败: %v", err)
 	}

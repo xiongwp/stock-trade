@@ -127,6 +127,32 @@ async function selectSymbol(symbol) {
   $("posForm").buyTime.value = new Date().toISOString().slice(0, 10);
   await loadChart(symbol);
   await loadPositions();
+  await loadStrategies();
+}
+
+// ---------- 策略排行 ----------
+const sigBadge = { 1: ["买入", "up"], "-1": ["卖出", "down"], 0: ["观望", "flat"] };
+
+async function loadStrategies() {
+  const sym = state.selected;
+  $("stratSymbol").textContent = sym || "—";
+  const stats = await fetch(`/api/strategies?symbol=${encodeURIComponent(sym || "")}`).then((r) => r.json());
+  const tbody = $("stratRows");
+  tbody.innerHTML = "";
+  stats.forEach((s, i) => {
+    const [label, cls] = sigBadge[s.currentSignal] || sigBadge[0];
+    const wr = s.trades > 0 ? fmtNum(s.winRate) + "%" : "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="rank">${i + 1}</td>
+      <td><div class="strat-name">${s.name}</div><div class="strat-desc">${s.desc}</div></td>
+      <td class="num strat-wr">${wr}</td>
+      <td class="num flat">${s.trades}</td>
+      <td class="num ${signCls(s.avgReturn)}">${s.avgReturn >= 0 ? "+" : ""}${fmtNum(s.avgReturn)}%</td>
+      <td class="num ${signCls(s.totalReturn)}">${s.totalReturn >= 0 ? "+" : ""}${fmtNum(s.totalReturn)}%</td>
+      <td><span class="sig-badge ${cls}">${label}</span>${s.symbolTrades ? ` <span class="flat" style="font-size:11px">(该股胜率 ${fmtNum(s.symbolWinRate)}%)</span>` : ""}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 async function removeSymbol(symbol) {
@@ -296,7 +322,7 @@ async function refreshLive() {
   await loadSymbols();
   await loadPnl();
   await loadAlerts();
-  if (state.selected) updateChartHead();
+  if (state.selected) { updateChartHead(); await loadStrategies(); }
 }
 
 // ---------- 启动 ----------
