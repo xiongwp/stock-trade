@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -186,7 +188,7 @@ func (s *Service) runStrategy(symbol string, price float64) {
 	if err != nil {
 		return
 	}
-	for _, sig := range evaluate(symbol, bars, price) {
+	for _, sig := range consensusSignals(symbol, bars, price) {
 		inserted, err := insertAlert(s.db, Alert{
 			Symbol:  symbol,
 			Kind:    sig.Kind,
@@ -201,14 +203,31 @@ func (s *Service) runStrategy(symbol string, price float64) {
 	}
 }
 
-// Run 启动后台轮询：每 interval 刷新报价+策略，每天补拉一次历史 K 线。
-func (s *Service) Run(interval time.Duration) {
-	// 启动后先刷一次。
+// RunForever 启动后台轮询，并在 panic 后自动重启循环，保证永不退出。
+func (s *Service) RunForever(interval time.Duration) {
+	for {
+		func() {
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("[recover] 后台轮询 panic: %v\n%s，2 秒后重启", rec, debug.Stack())
+					time.Sleep(2 * time.Second)
+				}
+			}()
+			s.run(interval)
+		}()
+	}
+}
+
+// run 是轮询主循环：每 interval 刷新报价+策略，每天补拉一次历史 K 线。
+// 单次网络错误只记录不中断，保证「永不死寂」。
+func (s *Service) run(interval time.Duration) {
 	if err := s.RefreshAll(); err != nil {
 		log.Printf("首次刷新失败: %v", err)
 	}
 	quoteTick := time.NewTicker(interval)
 	barTick := time.NewTicker(12 * time.Hour)
+	defer quoteTick.Stop()
+	defer barTick.Stop()
 	for {
 		select {
 		case <-quoteTick.C:
@@ -223,6 +242,84 @@ func (s *Service) Run(interval time.Duration) {
 			}
 		}
 	}
+}
+
+// StrategyStat 是单个策略的回测排名 + 对某只股票的当前信号。
+type StrategyStat struct {
+	Key           string  `json:"key"`
+	Name          string  `json:"name"`
+	Desc          string  `json:"desc"`
+	Trades        int     `json:"trades"`        // 全部自选股聚合的回测交易数
+	WinRate       float64 `json:"winRate"`       // 聚合胜率 %
+	AvgReturn     float64 `json:"avgReturn"`     // 每笔平均收益 %
+	TotalReturn   float64 `json:"totalReturn"`   // 平均累计收益 %
+	CurrentSignal int     `json:"currentSignal"` // 对所选股票：+1 买 / -1 卖 / 0 持有
+	SymbolWinRate float64 `json:"symbolWinRate"` // 在所选股票上的胜率 %
+	SymbolTrades  int     `json:"symbolTrades"`
+}
+
+// StrategyStats 对全部自选股回测每个策略并按胜率排名，
+// 同时给出对 focusSymbol 的当前信号与该股票上的胜率。
+func (s *Service) StrategyStats(focusSymbol string) ([]StrategyStat, error) {
+	names, err := listSymbolNames(s.db)
+	if err != nil {
+		return nil, err
+	}
+	// 预取各股票的 K 线与最新价。
+	barsBy := map[string][]BarRow{}
+	priceBy := map[string]float64{}
+	syms, _ := listSymbols(s.db)
+	for _, sy := range syms {
+		priceBy[sy.Symbol] = sy.LastPrice
+	}
+	for _, n := range names {
+		if b, err := getBars(s.db, n); err == nil {
+			barsBy[n] = b
+		}
+	}
+
+	var stats []StrategyStat
+	for _, strat := range strategies() {
+		st := StrategyStat{Key: strat.Key, Name: strat.Name, Desc: strat.Desc}
+		var totWins, totTrades int
+		var wRetSum, totalRetSum float64
+		var symCount int
+		for _, n := range names {
+			bars := barsBy[n]
+			if len(bars) < 61 {
+				continue
+			}
+			bt := backtest(bars, strat.Signals(bars))
+			totWins += bt.Wins
+			totTrades += bt.Trades
+			wRetSum += bt.AvgReturn * float64(bt.Trades)
+			totalRetSum += bt.TotalReturn
+			symCount++
+			if n == focusSymbol {
+				st.CurrentSignal = currentSignal(strat, bars, priceBy[n])
+				st.SymbolWinRate = bt.WinRate
+				st.SymbolTrades = bt.Trades
+			}
+		}
+		st.Trades = totTrades
+		if totTrades > 0 {
+			st.WinRate = float64(totWins) / float64(totTrades) * 100
+			st.AvgReturn = wRetSum / float64(totTrades)
+		}
+		if symCount > 0 {
+			st.TotalReturn = totalRetSum / float64(symCount)
+		}
+		stats = append(stats, st)
+	}
+
+	// 按胜率降序排名（无交易的沉底）。
+	sort.SliceStable(stats, func(i, j int) bool {
+		if (stats[i].Trades == 0) != (stats[j].Trades == 0) {
+			return stats[j].Trades == 0
+		}
+		return stats[i].WinRate > stats[j].WinRate
+	})
+	return stats, nil
 }
 
 func mustList(db *sql.DB) []Symbol {

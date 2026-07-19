@@ -254,6 +254,17 @@ func (h *api) alertAck(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// GET /api/strategies?symbol=AAPL —— 策略胜率排行 + 对该股票的当前信号。
+func (h *api) strategies(w http.ResponseWriter, r *http.Request) {
+	symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))
+	stats, err := h.svc.StrategyStats(symbol)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // POST /api/refresh —— 立即刷新报价与策略。
 func (h *api) refresh(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.RefreshAll(); err != nil {
