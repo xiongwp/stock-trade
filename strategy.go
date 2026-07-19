@@ -52,7 +52,6 @@ func emaSeq(vals []float64, n int) []float64 {
 			i++
 			continue
 		}
-		// 找到从 i 起的连续非 NaN 区间 [i, j)。
 		j := i
 		for j < len(vals) && !math.IsNaN(vals[j]) {
 			j++
@@ -135,6 +134,100 @@ func stddevSeq(vals []float64, n int) []float64 {
 	return out
 }
 
+// rocSeq n 日变动率（%）。
+func rocSeq(vals []float64, n int) []float64 {
+	out := make([]float64, len(vals))
+	for i := range vals {
+		if i < n || vals[i-n] == 0 {
+			out[i] = math.NaN()
+		} else {
+			out[i] = (vals[i] - vals[i-n]) / vals[i-n] * 100
+		}
+	}
+	return out
+}
+
+// stochKSeq 随机指标 %K。
+func stochKSeq(bars []BarRow, n int) []float64 {
+	h, l, c := highs(bars), lows(bars), closes(bars)
+	out := make([]float64, len(bars))
+	for i := range bars {
+		if i < n-1 {
+			out[i] = math.NaN()
+			continue
+		}
+		hh, ll := h[i], l[i]
+		for j := i - n + 1; j <= i; j++ {
+			if h[j] > hh {
+				hh = h[j]
+			}
+			if l[j] < ll {
+				ll = l[j]
+			}
+		}
+		if hh == ll {
+			out[i] = 50
+		} else {
+			out[i] = (c[i] - ll) / (hh - ll) * 100
+		}
+	}
+	return out
+}
+
+// williamsRSeq 威廉指标 %R（-100..0）。
+func williamsRSeq(bars []BarRow, n int) []float64 {
+	h, l, c := highs(bars), lows(bars), closes(bars)
+	out := make([]float64, len(bars))
+	for i := range bars {
+		if i < n-1 {
+			out[i] = math.NaN()
+			continue
+		}
+		hh, ll := h[i], l[i]
+		for j := i - n + 1; j <= i; j++ {
+			if h[j] > hh {
+				hh = h[j]
+			}
+			if l[j] < ll {
+				ll = l[j]
+			}
+		}
+		if hh == ll {
+			out[i] = -50
+		} else {
+			out[i] = (hh - c[i]) / (hh - ll) * -100
+		}
+	}
+	return out
+}
+
+// cciSeq 顺势指标 CCI。
+func cciSeq(bars []BarRow, n int) []float64 {
+	tp := make([]float64, len(bars))
+	for i, b := range bars {
+		tp[i] = (b.H + b.L + b.C) / 3
+	}
+	smaTP := smaSeq(tp, n)
+	out := make([]float64, len(bars))
+	for i := range bars {
+		if math.IsNaN(smaTP[i]) {
+			out[i] = math.NaN()
+			continue
+		}
+		md := 0.0
+		for j := i - n + 1; j <= i; j++ {
+			md += math.Abs(tp[j] - smaTP[i])
+		}
+		md /= float64(n)
+		if md == 0 {
+			out[i] = 0
+		} else {
+			out[i] = (tp[i] - smaTP[i]) / (0.015 * md)
+		}
+	}
+	return out
+}
+
 // crossUp 判断序列 a 在 i 处是否上穿 b。
 func crossUp(a, b []float64, i int) bool {
 	if i == 0 || math.IsNaN(a[i]) || math.IsNaN(b[i]) || math.IsNaN(a[i-1]) || math.IsNaN(b[i-1]) {
@@ -167,7 +260,6 @@ type Strategy struct {
 	Signals func(bars []BarRow) []int
 }
 
-// crossStrategy 用「快线上穿慢线买、下穿卖」构造策略。
 func crossStrategy(fast, slow func([]BarRow) []float64) func([]BarRow) []int {
 	return func(bars []BarRow) []int {
 		a, b := fast(bars), slow(bars)
@@ -198,194 +290,278 @@ func lows(bars []BarRow) []float64 {
 	return o
 }
 
-// strategies 返回全部内置策略（10 个经典技术策略）。
+// ---------- 策略生成器（参数化，便于批量扩展到 Top50） ----------
+
+func maCross(f, s int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("ma_%d_%d", f, s), Name: fmt.Sprintf("均线 MA%d/MA%d", f, s),
+		Desc: fmt.Sprintf("MA%d 上穿 MA%d 金叉买入，下穿死叉卖出", f, s),
+		Signals: crossStrategy(
+			func(b []BarRow) []float64 { return smaSeq(closes(b), f) },
+			func(b []BarRow) []float64 { return smaSeq(closes(b), s) }),
+	}
+}
+
+func emaCross(f, s int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("ema_%d_%d", f, s), Name: fmt.Sprintf("EMA %d/%d", f, s),
+		Desc: fmt.Sprintf("EMA%d 上穿 EMA%d 买入，下穿卖出", f, s),
+		Signals: crossStrategy(
+			func(b []BarRow) []float64 { return emaSeq(closes(b), f) },
+			func(b []BarRow) []float64 { return emaSeq(closes(b), s) }),
+	}
+}
+
+func macdStrat(f, s, sg int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("macd_%d_%d_%d", f, s, sg), Name: fmt.Sprintf("MACD(%d,%d,%d)", f, s, sg),
+		Desc: "MACD 线上穿信号线买入，下穿卖出",
+		Signals: func(b []BarRow) []int {
+			c := closes(b)
+			fast, slow := emaSeq(c, f), emaSeq(c, s)
+			macd := make([]float64, len(c))
+			for i := range c {
+				macd[i] = fast[i] - slow[i]
+			}
+			signal := emaSeq(macd, sg)
+			sig := make([]int, len(c))
+			for i := range c {
+				if crossUp(macd, signal, i) {
+					sig[i] = 1
+				} else if crossDown(macd, signal, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func rsiStrat(p int, lo, hi float64) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("rsi_%d_%.0f_%.0f", p, lo, hi), Name: fmt.Sprintf("RSI%d(%.0f/%.0f)", p, lo, hi),
+		Desc: fmt.Sprintf("RSI 上穿 %.0f 买入，下穿 %.0f 卖出", lo, hi),
+		Signals: func(b []BarRow) []int {
+			r := rsiSeq(closes(b), p)
+			loS, hiS := constSeq(r, lo), constSeq(r, hi)
+			sig := make([]int, len(b))
+			for i := range b {
+				if crossUp(r, loS, i) {
+					sig[i] = 1
+				} else if crossDown(r, hiS, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func bollStrat(p int, k float64) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("boll_%d_%.1f", p, k), Name: fmt.Sprintf("布林带(%d,%.1f)", p, k),
+		Desc: "触及下轨买入，触及上轨卖出（均值回归）",
+		Signals: func(b []BarRow) []int {
+			c := closes(b)
+			mid, sd := smaSeq(c, p), stddevSeq(c, p)
+			sig := make([]int, len(b))
+			for i := range b {
+				if math.IsNaN(mid[i]) || math.IsNaN(sd[i]) {
+					continue
+				}
+				if c[i] <= mid[i]-k*sd[i] {
+					sig[i] = 1
+				} else if c[i] >= mid[i]+k*sd[i] {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func donchianStrat(n int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("donchian_%d", n), Name: fmt.Sprintf("唐奇安通道(%d)", n),
+		Desc: fmt.Sprintf("突破 %d 日新高买入，跌破 %d 日新低卖出", n, n),
+		Signals: func(b []BarRow) []int {
+			h, l := highs(b), lows(b)
+			sig := make([]int, len(b))
+			for i := n; i < len(b); i++ {
+				hh, ll := h[i-1], l[i-1]
+				for j := i - n; j < i; j++ {
+					if h[j] > hh {
+						hh = h[j]
+					}
+					if l[j] < ll {
+						ll = l[j]
+					}
+				}
+				if b[i].C > hh {
+					sig[i] = 1
+				} else if b[i].C < ll {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func rocStrat(n int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("roc_%d", n), Name: fmt.Sprintf("动量 ROC(%d)", n),
+		Desc: fmt.Sprintf("%d 日变动率上穿 0 买入，下穿 0 卖出", n),
+		Signals: func(b []BarRow) []int {
+			roc := rocSeq(closes(b), n)
+			zero := constSeq(roc, 0)
+			sig := make([]int, len(b))
+			for i := range b {
+				if crossUp(roc, zero, i) {
+					sig[i] = 1
+				} else if crossDown(roc, zero, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func stochStrat(n int, loZone, hiZone float64) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("stoch_%d", n), Name: fmt.Sprintf("随机指标 KD(%d)", n),
+		Desc: "低位 %K 上穿 %D 买入，高位下穿卖出",
+		Signals: func(b []BarRow) []int {
+			k := stochKSeq(b, n)
+			d := smaSeq(k, 3)
+			sig := make([]int, len(b))
+			for i := range b {
+				if math.IsNaN(k[i]) || math.IsNaN(d[i]) {
+					continue
+				}
+				if crossUp(k, d, i) && k[i] < loZone {
+					sig[i] = 1
+				} else if crossDown(k, d, i) && k[i] > hiZone {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func meanRevStrat(p int, band float64) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("meanrev_%d_%.0f", p, band*100), Name: fmt.Sprintf("均值回归 SMA%d±%.0f%%", p, band*100),
+		Desc: fmt.Sprintf("偏离 %d 日均线 -%.0f%% 买入，+%.0f%% 卖出", p, band*100, band*100),
+		Signals: func(b []BarRow) []int {
+			c := closes(b)
+			mid := smaSeq(c, p)
+			sig := make([]int, len(b))
+			for i := range b {
+				if math.IsNaN(mid[i]) {
+					continue
+				}
+				if c[i] < mid[i]*(1-band) {
+					sig[i] = 1
+				} else if c[i] > mid[i]*(1+band) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func williamsStrat(p int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("wr_%d", p), Name: fmt.Sprintf("威廉指标 %%R(%d)", p),
+		Desc: "上穿 -80 买入，下穿 -20 卖出",
+		Signals: func(b []BarRow) []int {
+			wr := williamsRSeq(b, p)
+			loS, hiS := constSeq(wr, -80), constSeq(wr, -20)
+			sig := make([]int, len(b))
+			for i := range b {
+				if crossUp(wr, loS, i) {
+					sig[i] = 1
+				} else if crossDown(wr, hiS, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func cciStrat(n int, level float64) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("cci_%d_%.0f", n, level), Name: fmt.Sprintf("CCI(%d,±%.0f)", n, level),
+		Desc: fmt.Sprintf("CCI 上穿 -%.0f 买入，下穿 +%.0f 卖出", level, level),
+		Signals: func(b []BarRow) []int {
+			cci := cciSeq(b, n)
+			loS, hiS := constSeq(cci, -level), constSeq(cci, level)
+			sig := make([]int, len(b))
+			for i := range b {
+				if crossUp(cci, loS, i) {
+					sig[i] = 1
+				} else if crossDown(cci, hiS, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+func emaTrendStrat(f, s, t int) Strategy {
+	return Strategy{
+		Key: fmt.Sprintf("ematrend_%d_%d_%d", f, s, t), Name: fmt.Sprintf("EMA%d/%d + MA%d 趋势", f, s, t),
+		Desc: fmt.Sprintf("金叉且价在 MA%d 上方才买入，死叉即卖出", t),
+		Signals: func(b []BarRow) []int {
+			c := closes(b)
+			fast, slow, trend := emaSeq(c, f), emaSeq(c, s), smaSeq(c, t)
+			sig := make([]int, len(b))
+			for i := range b {
+				if crossUp(fast, slow, i) && !math.IsNaN(trend[i]) && c[i] > trend[i] {
+					sig[i] = 1
+				} else if crossDown(fast, slow, i) {
+					sig[i] = -1
+				}
+			}
+			return sig
+		},
+	}
+}
+
+// strategies 返回全部内置策略（约 50 个经典技术策略，用于胜率排行 Top50）。
 func strategies() []Strategy {
-	cl := func(b []BarRow) []float64 { return closes(b) }
 	return []Strategy{
-		{
-			Key: "ma_5_20", Name: "均线 MA5/MA20", Desc: "短均线上穿长均线金叉买入，下穿死叉卖出",
-			Signals: crossStrategy(
-				func(b []BarRow) []float64 { return smaSeq(cl(b), 5) },
-				func(b []BarRow) []float64 { return smaSeq(cl(b), 20) }),
-		},
-		{
-			Key: "ma_20_60", Name: "均线 MA20/MA60", Desc: "中长均线金叉死叉，跟踪中期趋势",
-			Signals: crossStrategy(
-				func(b []BarRow) []float64 { return smaSeq(cl(b), 20) },
-				func(b []BarRow) []float64 { return smaSeq(cl(b), 60) }),
-		},
-		{
-			Key: "ema_12_26", Name: "EMA 12/26", Desc: "指数均线金叉死叉，比 SMA 更灵敏",
-			Signals: crossStrategy(
-				func(b []BarRow) []float64 { return emaSeq(cl(b), 12) },
-				func(b []BarRow) []float64 { return emaSeq(cl(b), 26) }),
-		},
-		{
-			Key: "macd", Name: "MACD(12,26,9)", Desc: "MACD 线上穿信号线买入，下穿卖出",
-			Signals: func(b []BarRow) []int {
-				c := cl(b)
-				macd := make([]float64, len(c))
-				fast, slow := emaSeq(c, 12), emaSeq(c, 26)
-				for i := range c {
-					macd[i] = fast[i] - slow[i]
-				}
-				signal := emaSeq(macd, 9)
-				sig := make([]int, len(c))
-				for i := range c {
-					if crossUp(macd, signal, i) {
-						sig[i] = 1
-					} else if crossDown(macd, signal, i) {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "rsi_14", Name: "RSI(14) 超买超卖", Desc: "RSI 上穿 30 买入，下穿 70 卖出",
-			Signals: func(b []BarRow) []int {
-				r := rsiSeq(cl(b), 14)
-				lo, hi := constSeq(r, 30), constSeq(r, 70)
-				sig := make([]int, len(b))
-				for i := range b {
-					if crossUp(r, lo, i) {
-						sig[i] = 1
-					} else if crossDown(r, hi, i) {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "boll_20_2", Name: "布林带(20,2)", Desc: "触及下轨买入，触及上轨卖出（均值回归）",
-			Signals: func(b []BarRow) []int {
-				c := cl(b)
-				mid := smaSeq(c, 20)
-				sd := stddevSeq(c, 20)
-				sig := make([]int, len(b))
-				for i := range b {
-					if math.IsNaN(mid[i]) || math.IsNaN(sd[i]) {
-						continue
-					}
-					lower := mid[i] - 2*sd[i]
-					upper := mid[i] + 2*sd[i]
-					if c[i] <= lower {
-						sig[i] = 1
-					} else if c[i] >= upper {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "donchian_20", Name: "唐奇安通道(20)", Desc: "突破 20 日新高买入，跌破 20 日新低卖出",
-			Signals: func(b []BarRow) []int {
-				h, l := highs(b), lows(b)
-				sig := make([]int, len(b))
-				for i := 20; i < len(b); i++ {
-					hh, ll := h[i-1], l[i-1]
-					for j := i - 20; j < i; j++ {
-						if h[j] > hh {
-							hh = h[j]
-						}
-						if l[j] < ll {
-							ll = l[j]
-						}
-					}
-					if b[i].C > hh {
-						sig[i] = 1
-					} else if b[i].C < ll {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "roc_12", Name: "动量 ROC(12)", Desc: "12 日变动率上穿 0 买入，下穿 0 卖出",
-			Signals: func(b []BarRow) []int {
-				c := cl(b)
-				roc := make([]float64, len(c))
-				for i := range c {
-					if i < 12 {
-						roc[i] = math.NaN()
-					} else {
-						roc[i] = (c[i] - c[i-12]) / c[i-12] * 100
-					}
-				}
-				zero := constSeq(roc, 0)
-				sig := make([]int, len(c))
-				for i := range c {
-					if crossUp(roc, zero, i) {
-						sig[i] = 1
-					} else if crossDown(roc, zero, i) {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "stoch_14", Name: "随机指标 KD(14)", Desc: "低位 %K 上穿 %D 买入，高位下穿卖出",
-			Signals: func(b []BarRow) []int {
-				h, l, c := highs(b), lows(b), cl(b)
-				k := make([]float64, len(b))
-				for i := range b {
-					if i < 13 {
-						k[i] = math.NaN()
-						continue
-					}
-					hh, ll := h[i], l[i]
-					for j := i - 13; j <= i; j++ {
-						if h[j] > hh {
-							hh = h[j]
-						}
-						if l[j] < ll {
-							ll = l[j]
-						}
-					}
-					if hh == ll {
-						k[i] = 50
-					} else {
-						k[i] = (c[i] - ll) / (hh - ll) * 100
-					}
-				}
-				d := smaSeq(k, 3)
-				sig := make([]int, len(b))
-				for i := range b {
-					if math.IsNaN(k[i]) || math.IsNaN(d[i]) {
-						continue
-					}
-					if crossUp(k, d, i) && k[i] < 30 {
-						sig[i] = 1
-					} else if crossDown(k, d, i) && k[i] > 70 {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
-		{
-			Key: "meanrev_sma20", Name: "均值回归 SMA20±5%", Desc: "偏离 20 日均线 -5% 买入，+5% 卖出",
-			Signals: func(b []BarRow) []int {
-				c := cl(b)
-				mid := smaSeq(c, 20)
-				sig := make([]int, len(b))
-				for i := range b {
-					if math.IsNaN(mid[i]) {
-						continue
-					}
-					if c[i] < mid[i]*0.95 {
-						sig[i] = 1
-					} else if c[i] > mid[i]*1.05 {
-						sig[i] = -1
-					}
-				}
-				return sig
-			},
-		},
+		// 均线金叉死叉（10）
+		maCross(5, 10), maCross(5, 20), maCross(8, 21), maCross(10, 20), maCross(10, 30),
+		maCross(10, 50), maCross(20, 50), maCross(20, 60), maCross(50, 100), maCross(50, 200),
+		// 指数均线（6）
+		emaCross(5, 13), emaCross(8, 21), emaCross(9, 21), emaCross(12, 26), emaCross(20, 50), emaCross(21, 55),
+		// MACD（2）
+		macdStrat(12, 26, 9), macdStrat(5, 35, 5),
+		// RSI（6）
+		rsiStrat(6, 30, 70), rsiStrat(6, 20, 80), rsiStrat(14, 30, 70), rsiStrat(14, 20, 80), rsiStrat(21, 30, 70), rsiStrat(9, 25, 75),
+		// 布林带（4）
+		bollStrat(20, 2.0), bollStrat(20, 2.5), bollStrat(10, 1.5), bollStrat(20, 1.5),
+		// 唐奇安通道（4）
+		donchianStrat(10), donchianStrat(20), donchianStrat(30), donchianStrat(55),
+		// 动量 ROC（5）
+		rocStrat(5), rocStrat(10), rocStrat(12), rocStrat(20), rocStrat(25),
+		// 随机指标 KD（3）
+		stochStrat(9, 20, 80), stochStrat(14, 30, 70), stochStrat(21, 20, 80),
+		// 均值回归（4）
+		meanRevStrat(20, 0.03), meanRevStrat(20, 0.05), meanRevStrat(20, 0.08), meanRevStrat(50, 0.05),
+		// 威廉指标（2）
+		williamsStrat(14), williamsStrat(21),
+		// CCI（2）
+		cciStrat(20, 100), cciStrat(20, 150),
+		// 趋势过滤（2）
+		emaTrendStrat(5, 20, 100), emaTrendStrat(10, 50, 200),
 	}
 }
 
@@ -425,7 +601,6 @@ func backtest(bars []BarRow, sig []int) Backtest {
 			closeTrade(bars[i].C)
 		}
 	}
-	// 期末仍持仓：按最后一根收盘平掉，计入统计。
 	if pos && len(bars) > 0 {
 		closeTrade(bars[len(bars)-1].C)
 	}
@@ -454,9 +629,11 @@ func currentSignal(strat Strategy, bars []BarRow, lastPrice float64) int {
 
 // ===================== 实时共振提醒 =====================
 
-// consensus 统计最新一根 K 线上有多少策略看多/看空，用于生成共振提醒。
-func consensus(bars []BarRow, lastPrice float64) (buy, sell int) {
-	for _, s := range strategies() {
+// consensus 统计最新一根 K 线上有多少策略看多/看空。
+func consensus(bars []BarRow, lastPrice float64) (buy, sell, total int) {
+	all := strategies()
+	total = len(all)
+	for _, s := range all {
 		switch currentSignal(s, bars, lastPrice) {
 		case 1:
 			buy++
@@ -467,13 +644,16 @@ func consensus(bars []BarRow, lastPrice float64) (buy, sell int) {
 	return
 }
 
-// consensusSignals 若达到阈值则产出共振提醒。
+// consensusSignals 当同向策略占比达阈值（约 30%）时产出共振提醒。
 func consensusSignals(symbol string, bars []BarRow, lastPrice float64) []Signal {
-	const threshold = 3
 	if len(bars) < 61 {
 		return nil
 	}
-	buy, sell := consensus(bars, lastPrice)
+	buy, sell, total := consensus(bars, lastPrice)
+	threshold := total * 3 / 10
+	if threshold < 5 {
+		threshold = 5
+	}
 	day := time.Unix(bars[len(bars)-1].Time, 0).UTC().Format("2006-01-02")
 	price := lastPrice
 	if price == 0 {
@@ -483,14 +663,14 @@ func consensusSignals(symbol string, bars []BarRow, lastPrice float64) []Signal 
 	if buy >= threshold && buy > sell {
 		out = append(out, Signal{
 			Kind:     "consensus_buy",
-			Message:  fmt.Sprintf("%s 多策略共振看多（%d/10 买入信号），建议关注买入", symbol, buy),
+			Message:  fmt.Sprintf("%s 多策略共振看多（%d/%d 买入信号），建议关注买入", symbol, buy, total),
 			Price:    price,
 			DedupKey: fmt.Sprintf("%s|consensus_buy|%s", symbol, day),
 		})
 	} else if sell >= threshold && sell > buy {
 		out = append(out, Signal{
 			Kind:     "consensus_sell",
-			Message:  fmt.Sprintf("%s 多策略共振看空（%d/10 卖出信号），建议关注卖出", symbol, sell),
+			Message:  fmt.Sprintf("%s 多策略共振看空（%d/%d 卖出信号），建议关注卖出", symbol, sell, total),
 			Price:    price,
 			DedupKey: fmt.Sprintf("%s|consensus_sell|%s", symbol, day),
 		})

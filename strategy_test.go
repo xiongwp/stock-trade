@@ -60,8 +60,18 @@ func TestBacktestMACross(t *testing.T) {
 }
 
 func TestStrategiesCount(t *testing.T) {
-	if n := len(strategies()); n != 10 {
-		t.Fatalf("应内置 10 个策略，实际 %d", n)
+	if n := len(strategies()); n < 50 {
+		t.Fatalf("应内置至少 50 个策略，实际 %d", n)
+	}
+}
+
+func TestStrategyKeysUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, s := range strategies() {
+		if seen[s.Key] {
+			t.Fatalf("策略 key 重复: %s", s.Key)
+		}
+		seen[s.Key] = true
 	}
 }
 
