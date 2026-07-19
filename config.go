@@ -14,7 +14,9 @@ type Config struct {
 	Feed      string `json:"feed"` // iex（免费）或 sip（需订阅），默认 iex
 }
 
-func loadConfig() (Config, error) {
+// loadConfig 读取配置。返回 (配置, 是否已配置密钥, 解析错误)。
+// 缺少密钥不算错误：服务照常启动、只是不轮询，避免 KeepAlive 崩溃循环。
+func loadConfig() (Config, bool, error) {
 	c := Config{
 		KeyID:     os.Getenv("APCA_API_KEY_ID"),
 		SecretKey: os.Getenv("APCA_API_SECRET_KEY"),
@@ -26,7 +28,7 @@ func loadConfig() (Config, error) {
 		if data, err := os.ReadFile("config.json"); err == nil {
 			var fromFile Config
 			if err := json.Unmarshal(data, &fromFile); err != nil {
-				return c, fmt.Errorf("解析 config.json 失败: %w", err)
+				return c, false, fmt.Errorf("解析 config.json 失败: %w", err)
 			}
 			if c.KeyID == "" {
 				c.KeyID = fromFile.KeyID
@@ -43,8 +45,6 @@ func loadConfig() (Config, error) {
 	if c.Feed == "" {
 		c.Feed = "iex"
 	}
-	if c.KeyID == "" || c.SecretKey == "" {
-		return c, fmt.Errorf("缺少 Alpaca 密钥：请设置环境变量 APCA_API_KEY_ID / APCA_API_SECRET_KEY，或创建 config.json")
-	}
-	return c, nil
+	configured := c.KeyID != "" && c.SecretKey != ""
+	return c, configured, nil
 }

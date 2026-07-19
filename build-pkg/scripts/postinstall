@@ -1,0 +1,50 @@
+#!/bin/bash
+set -e
+ID="com.stocktrade.server"
+BIN="/usr/local/stocktrade/stocktrade"
+
+# 目标用户（安装器以 root 运行，需定位当前登录用户）
+CU="${USER:-}"
+[ -z "$CU" ] || [ "$CU" = "root" ] && CU="$(stat -f%Su /dev/console)"
+UID_="$(id -u "$CU")"
+UH="$(dscl . -read "/Users/$CU" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+[ -z "$UH" ] && UH="/Users/$CU"
+
+DATA="$UH/Library/Application Support/StockTrade"
+LA="$UH/Library/LaunchAgents"
+PLIST="$LA/${ID}.plist"
+
+mkdir -p "$DATA" "$LA"
+
+# 数据迁移：数据目录若还没有 db/config，从旧安装(旧 plist 的 WorkingDirectory)拷贝，保证升级/迁移数据兼容
+if [ -f "$PLIST" ]; then
+  OLD_WD="$(/usr/libexec/PlistBuddy -c 'Print :WorkingDirectory' "$PLIST" 2>/dev/null || true)"
+  if [ -n "$OLD_WD" ] && [ -d "$OLD_WD" ] && [ "$OLD_WD" != "$DATA" ]; then
+    [ -f "$DATA/stock-trade.db" ] || { [ -f "$OLD_WD/stock-trade.db" ] && cp -f "$OLD_WD/stock-trade.db" "$DATA/"; }
+    [ -f "$DATA/config.json" ]    || { [ -f "$OLD_WD/config.json" ]    && cp -f "$OLD_WD/config.json" "$DATA/"; }
+  fi
+fi
+
+# 写 LaunchAgent：运行固定路径二进制，工作目录=数据目录（db/config 落在这里，升级不动）
+cat > "$PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>${ID}</string>
+  <key>ProgramArguments</key><array><string>${BIN}</string></array>
+  <key>WorkingDirectory</key><string>${DATA}</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>5</integer>
+  <key>StandardOutPath</key><string>${DATA}/server.log</string>
+  <key>StandardErrorPath</key><string>${DATA}/server.log</string>
+</dict></plist>
+PL
+
+chown "$CU" "$PLIST"
+chown -R "$CU" "$DATA"
+
+# 在用户上下文重载（升级时先卸旧再装新）
+launchctl bootout "gui/$UID_/${ID}" 2>/dev/null || launchctl asuser "$UID_" launchctl unload "$PLIST" 2>/dev/null || true
+launchctl bootstrap "gui/$UID_" "$PLIST" 2>/dev/null || launchctl asuser "$UID_" launchctl load "$PLIST" 2>/dev/null || true
+exit 0

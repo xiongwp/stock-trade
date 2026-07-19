@@ -26,6 +26,9 @@ func newAlpaca(cfg Config) *Alpaca {
 }
 
 func (a *Alpaca) do(method, rawURL string) ([]byte, error) {
+	if a.cfg.KeyID == "" || a.cfg.SecretKey == "" {
+		return nil, fmt.Errorf("尚未配置 Alpaca 密钥，请在数据目录的 config.json 填入 keyId/secretKey 后重启")
+	}
 	var lastErr error
 	// 对网络错误 / 429 / 5xx 做最多 3 次指数退避重试，提升长时间运行的韧性。
 	for attempt := 0; attempt < 3; attempt++ {

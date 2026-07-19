@@ -489,6 +489,11 @@ func (h *api) strategies(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// GET /api/version —— 返回当前版本（供页面显示、升级后确认）。
+func (h *api) versionInfo(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"version": version})
+}
+
 // GET /api/server-info —— 返回可访问的服务地址（供页面显示，含手机局域网地址）。
 func (h *api) serverInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{

@@ -16,6 +16,9 @@ var webFS embed.FS
 // listenPort 是服务端口。绑定 0.0.0.0 以便家庭局域网内的手机也能访问。
 const listenPort = "9010"
 
+// version 由构建脚本通过 -ldflags "-X main.version=..." 注入。
+var version = "dev"
+
 // recoverMW 拦截每个请求中的 panic，避免单个请求打崩整个进程。
 func recoverMW(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +35,7 @@ func recoverMW(next http.Handler) http.Handler {
 func main() {
 	log.SetFlags(log.LstdFlags)
 
-	cfg, err := loadConfig()
+	cfg, configured, err := loadConfig()
 	if err != nil {
 		log.Fatalf("配置错误: %v", err)
 	}
@@ -47,7 +50,12 @@ func main() {
 	h := &api{svc: svc}
 
 	// 后台轮询：每 30 秒刷新报价并运行策略。崩溃自动重启，永不退出。
-	go svc.RunForever(30 * time.Second)
+	// 未配置密钥时不轮询（避免 KeepAlive 崩溃循环），服务照常提供页面。
+	if configured {
+		go svc.RunForever(30 * time.Second)
+	} else {
+		log.Printf("⚠ 尚未配置 Alpaca 密钥：请在数据目录创建 config.json（含 keyId/secretKey）。页面可打开，但暂无行情。")
+	}
 
 	staticFS, err := fs.Sub(webFS, "web")
 	if err != nil {
@@ -65,6 +73,7 @@ func main() {
 	mux.HandleFunc("/api/pnl", h.pnl)
 	mux.HandleFunc("/api/stats", h.stats)
 	mux.HandleFunc("/api/server-info", h.serverInfo)
+	mux.HandleFunc("/api/version", h.versionInfo)
 	mux.HandleFunc("/api/strategies", h.strategies)
 	mux.HandleFunc("/api/alerts", h.alerts)
 	mux.HandleFunc("/api/refresh", h.refresh)
@@ -86,7 +95,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("股票交易终端（%s 行情）已启动，可用访问地址：", strings.ToUpper(cfg.Feed))
+	log.Printf("股票交易终端 v%s（%s 行情）已启动，可用访问地址：", version, strings.ToUpper(cfg.Feed))
 	for _, a := range serverAddrs(listenPort) {
 		log.Printf("    %-28s %s", a.Label, a.URL)
 	}
