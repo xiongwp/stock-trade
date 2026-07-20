@@ -11,7 +11,7 @@ import (
 type Config struct {
 	KeyID     string `json:"keyId"`
 	SecretKey string `json:"secretKey"`
-	Feed      string `json:"feed"` // iex（免费）或 sip（需订阅），默认 iex
+	Feed      string `json:"feed"` // iex（免费）或 sip（需订阅），默认 iex；夜盘时段实时报价自动切到 overnight
 }
 
 // loadConfig 读取配置。返回 (配置, 是否已配置密钥, 解析错误)。
