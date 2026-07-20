@@ -3,6 +3,7 @@
 const state = {
   selected: null,
   tf: "1Day",
+  ext: false, // 延长时段（夜盘+盘前+盘后），仅分钟图有效
   selectedStrategy: null,
   symbols: [],
   chart: null,
@@ -28,6 +29,9 @@ const fmtUsd = (n) => (n < 0 ? "-" : "") + "$" + Math.abs(n).toLocaleString("en-
 const fmtNum = (n, d = 2) => Number(n).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
 const signCls = (n) => (n > 0 ? "up" : n < 0 ? "down" : "flat");
 const isIntraday = (tf) => tf.endsWith("Min") || tf.endsWith("Hour");
+const isMinuteTf = (tf) => tf.endsWith("Min");
+// 延长时段仅对分钟图有效：拼接查询串。
+const extQuery = () => (state.ext && isMinuteTf(state.tf) ? "&ext=1" : "");
 const signStr = (n) => (n >= 0 ? "+" : "");
 
 // ---------- 视图切换 ----------
@@ -78,7 +82,7 @@ async function loadChart() {
   if (!symbol) return;
   let bars;
   try {
-    bars = await (await fetch(`/api/bars/${symbol}?tf=${state.tf}`)).json();
+    bars = await (await fetch(`/api/bars/${symbol}?tf=${state.tf}${extQuery()}`)).json();
   } catch { bars = []; }
   if (!Array.isArray(bars)) bars = [];
   state.chart.applyOptions({ timeScale: { timeVisible: isIntraday(state.tf), secondsVisible: false } });
@@ -98,7 +102,7 @@ async function applyMarkers() {
   }
   let pts = [];
   try {
-    pts = await (await fetch(`/api/signals/${state.selected}?strategy=${state.selectedStrategy}&tf=${state.tf}`)).json();
+    pts = await (await fetch(`/api/signals/${state.selected}?strategy=${state.selectedStrategy}&tf=${state.tf}${extQuery()}`)).json();
   } catch { pts = []; }
   if (!Array.isArray(pts)) pts = [];
   const markers = pts.map((p) =>
@@ -111,14 +115,32 @@ async function applyMarkers() {
   $("markerLegend").hidden = markers.length === 0;
 }
 
-// 周期切换
-document.querySelectorAll("#tfBar .tf").forEach((btn) => {
+// 延长时段开关随周期启用/禁用：仅分钟图可用。
+function syncExtToggle() {
+  const t = $("extToggle");
+  if (!t) return;
+  const usable = isMinuteTf(state.tf);
+  t.disabled = !usable;
+  t.classList.toggle("active", usable && state.ext);
+}
+
+// 周期切换（data-tf 才是周期按钮，排除延长时段开关）
+document.querySelectorAll("#tfBar .tf[data-tf]").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll("#tfBar .tf").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll("#tfBar .tf[data-tf]").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     state.tf = btn.dataset.tf;
+    syncExtToggle();
     loadChart();
   });
+});
+
+// 延长时段开关
+$("extToggle").addEventListener("click", () => {
+  if (!isMinuteTf(state.tf)) return;
+  state.ext = !state.ext;
+  syncExtToggle();
+  loadChart();
 });
 
 // ---------- 自选列表 ----------

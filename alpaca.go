@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -99,8 +100,86 @@ type Bar struct {
 	V int64     `json:"v"`
 }
 
-// GetBars 拉取某只股票在 [start, end] 区间内的日线（或指定周期）K 线，自动翻页。
-func (a *Alpaca) GetBars(symbol, timeframe string, start, end time.Time) ([]Bar, error) {
+// isMinuteTF 判断是否为分钟级周期（延长时段/夜盘只对分钟图有意义）。
+func isMinuteTF(tf string) bool { return strings.HasSuffix(tf, "Min") }
+
+// inRegularSession 判断某时刻是否落在美股常规时段（美东 09:30–16:00，周一至周五）。
+func inRegularSession(t time.Time) bool {
+	if etLoc == nil {
+		return true
+	}
+	et := t.In(etLoc)
+	if wd := et.Weekday(); wd == time.Saturday || wd == time.Sunday {
+		return false
+	}
+	m := et.Hour()*60 + et.Minute()
+	return m >= 9*60+30 && m < 16*60
+}
+
+// GetBars 拉取某只股票在 [start, end] 区间内指定周期的 K 线。
+//
+// extended 仅对分钟图生效：
+//   - false（默认）：只保留常规时段(09:30–16:00)蜡烛，图面干净，不与日间数据混淆；
+//   - true：叠加盘前(04:00–09:30)/盘后(16:00–20:00，均来自 iex)与夜盘(20:00–次日04:00，
+//     来自 overnight/Blue Ocean ATS)，拼出 24 小时全时段。
+//
+// 付费 sip feed 本身已含全时段延长数据，直接单次拉取。
+func (a *Alpaca) GetBars(symbol, timeframe string, start, end time.Time, extended bool) ([]Bar, error) {
+	base := a.cfg.Feed
+	if base == "" {
+		base = "iex"
+	}
+	// 非分钟周期，或 sip（已覆盖全时段），单次拉取即可。
+	if !isMinuteTF(timeframe) || base == "sip" {
+		return a.getBarsFeed(symbol, timeframe, base, start, end)
+	}
+
+	// 免费 iex：先拉日间（含盘前/盘中/盘后）。
+	day, err := a.getBarsFeed(symbol, timeframe, "iex", start, end)
+	if err != nil {
+		return nil, err
+	}
+	if !extended {
+		return filterBars(day, inRegularSession), nil
+	}
+	// 延长时段：再叠加夜盘蜡烛，拼出 24 小时。夜盘不可用时退回日间延长，不致命。
+	night, err := a.getBarsFeed(symbol, timeframe, "overnight", start, end)
+	if err != nil {
+		return day, nil
+	}
+	return mergeBars(day, night), nil
+}
+
+// filterBars 原地保留满足 keep 的蜡烛。
+func filterBars(bars []Bar, keep func(time.Time) bool) []Bar {
+	out := bars[:0]
+	for _, b := range bars {
+		if keep(b.T) {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// mergeBars 合并两组蜡烛，按时间升序并去除重复时间戳。
+func mergeBars(a, b []Bar) []Bar {
+	all := make([]Bar, 0, len(a)+len(b))
+	all = append(all, a...)
+	all = append(all, b...)
+	sort.Slice(all, func(i, j int) bool { return all[i].T.Before(all[j].T) })
+	out := all[:0]
+	var last time.Time
+	for _, x := range all {
+		if len(out) == 0 || !x.T.Equal(last) {
+			out = append(out, x)
+			last = x.T
+		}
+	}
+	return out
+}
+
+// getBarsFeed 用指定 feed 拉取某只股票在 [start, end] 区间的 K 线，自动翻页。
+func (a *Alpaca) getBarsFeed(symbol, timeframe, feed string, start, end time.Time) ([]Bar, error) {
 	var all []Bar
 	pageToken := ""
 	for {
@@ -110,7 +189,7 @@ func (a *Alpaca) GetBars(symbol, timeframe string, start, end time.Time) ([]Bar,
 		q.Set("end", end.Format(time.RFC3339))
 		q.Set("limit", "10000")
 		q.Set("adjustment", "split")
-		q.Set("feed", a.cfg.Feed)
+		q.Set("feed", feed)
 		if pageToken != "" {
 			q.Set("page_token", pageToken)
 		}

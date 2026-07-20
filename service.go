@@ -51,7 +51,8 @@ var timeframes = map[string]struct {
 }
 
 // Bars 返回某只股票指定周期的 K 线：日线走本地库，其它周期实时拉取并缓存 60 秒。
-func (s *Service) Bars(symbol, tf string) ([]BarRow, error) {
+// extended 仅对分钟图生效：true 时叠加夜盘/盘前/盘后，拼出 24 小时全时段。
+func (s *Service) Bars(symbol, tf string, extended bool) ([]BarRow, error) {
 	if _, ok := timeframes[tf]; !ok {
 		tf = "1Day"
 	}
@@ -68,7 +69,11 @@ func (s *Service) Bars(symbol, tf string) ([]BarRow, error) {
 		return bars, nil
 	}
 
+	// 延长时段与常规时段的分钟数据不同，缓存需分开。
 	key := symbol + "|" + tf
+	if extended {
+		key += "|ext"
+	}
 	s.mu.Lock()
 	if e, ok := s.barCache[key]; ok && time.Since(e.at) < 60*time.Second {
 		s.mu.Unlock()
@@ -79,7 +84,7 @@ func (s *Service) Bars(symbol, tf string) ([]BarRow, error) {
 	spec := timeframes[tf]
 	end := time.Now()
 	start := end.Add(-spec.lookback)
-	raw, err := s.ap.GetBars(symbol, spec.alpaca, start, end)
+	raw, err := s.ap.GetBars(symbol, spec.alpaca, start, end, extended)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +105,8 @@ type SignalPoint struct {
 }
 
 // Signals 用指定策略在指定周期的 K 线上算出所有买卖点，供图表标注。
-func (s *Service) Signals(symbol, stratKey, tf string) ([]SignalPoint, error) {
+// extended 与图表保持一致，确保标记落在同一批蜡烛上。
+func (s *Service) Signals(symbol, stratKey, tf string, extended bool) ([]SignalPoint, error) {
 	var strat Strategy
 	found := false
 	for _, st := range strategies() {
@@ -112,7 +118,7 @@ func (s *Service) Signals(symbol, stratKey, tf string) ([]SignalPoint, error) {
 	if !found {
 		return nil, fmt.Errorf("未知策略: %s", stratKey)
 	}
-	bars, err := s.Bars(symbol, tf)
+	bars, err := s.Bars(symbol, tf, extended)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +236,7 @@ func (s *Service) ensureBars(symbol string) error {
 	}
 	end := time.Now()
 	start := end.AddDate(-1, 0, 0)
-	bars, err := s.ap.GetBars(symbol, "1Day", start, end)
+	bars, err := s.ap.GetBars(symbol, "1Day", start, end, false)
 	if err != nil {
 		return err
 	}

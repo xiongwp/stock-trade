@@ -24,6 +24,12 @@ func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// extendedParam 解析 ext 查询参数：ext=1/true 表示延长时段（夜盘+盘前+盘后）。
+func extendedParam(r *http.Request) bool {
+	v := r.URL.Query().Get("ext")
+	return v == "1" || v == "true"
+}
+
 // GET /api/symbols | POST /api/symbols
 func (h *api) symbols(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -96,7 +102,7 @@ func (h *api) bars(w http.ResponseWriter, r *http.Request) {
 	if tf == "" {
 		tf = "1Day"
 	}
-	bars, err := h.svc.Bars(sym, tf)
+	bars, err := h.svc.Bars(sym, tf, extendedParam(r))
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -116,7 +122,7 @@ func (h *api) signals(w http.ResponseWriter, r *http.Request) {
 	if tf == "" {
 		tf = "1Day"
 	}
-	points, err := h.svc.Signals(sym, strat, tf)
+	points, err := h.svc.Signals(sym, strat, tf, extendedParam(r))
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
