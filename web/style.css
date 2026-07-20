@@ -87,6 +87,7 @@ body {
 .mkt-session.live { color: var(--up); }
 .mkt-session.pre { color: #f59e0b; }
 .mkt-session.post { color: #a855f7; }
+.mkt-session.night { color: #818cf8; }
 .mkt-session.flat { color: var(--muted); }
 
 /* 右侧策略列表 */

@@ -192,7 +192,7 @@ async function selectSymbol(symbol) {
   renderWatchlist();
   updateChartHead();
   $("posSymbol").textContent = symbol;
-  $("posForm").buyTime.value = new Date().toISOString().slice(0, 10);
+  $("posForm").time.value = new Date().toISOString().slice(0, 10);
   await loadChart();
   await loadPositions();
   await loadStrategyList();
@@ -608,11 +608,17 @@ function renderMarketSession() {
   let hh = parseInt(get("hour"), 10); if (hh === 24) hh = 0;
   const mins = hh * 60 + parseInt(get("minute"), 10);
   let label = "休市", cls = "flat";
-  if (wd === "Sat" || wd === "Sun") { label = "休市·周末"; }
+  const overnightClock = mins >= 1200 || mins < 240; // 20:00–次日 04:00
+  if (overnightClock) {
+    // 夜盘(Blue Ocean ATS)：周日 20:00 至周五 04:00；周五夜、周六无夜盘。
+    const noSession = wd === "Sat" || (wd === "Fri" && mins >= 1200) || (wd === "Sun" && mins < 1200);
+    if (noSession) { label = wd === "Sat" || wd === "Sun" ? "休市·周末" : "休市·夜间"; }
+    else { label = "夜盘"; cls = "night"; }
+  }
+  else if (wd === "Sat" || wd === "Sun") { label = "休市·周末"; }
   else if (mins >= 240 && mins < 570) { label = "盘前"; cls = "pre"; }
   else if (mins >= 570 && mins < 960) { label = "盘中"; cls = "live"; }
   else if (mins >= 960 && mins < 1200) { label = "盘后"; cls = "post"; }
-  else { label = "休市·夜间"; }
   el.className = "mkt-session " + cls;
   el.textContent = "● " + label;
 }
