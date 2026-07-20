@@ -85,6 +85,7 @@
           <input name="note" placeholder="备注（可选）">
           <button class="btn" type="submit" id="posSubmit">记录买入</button>
         </form>
+        <div class="table-scroll">
         <table class="pos-table">
           <thead>
             <tr><th>方向</th><th>开仓时间</th><th class="num">数量</th><th class="num">开仓价</th>
@@ -93,6 +94,7 @@
           </thead>
           <tbody id="posRows"></tbody>
         </table>
+        </div>
         <p id="posEmpty" class="hint" hidden>该股票还没有买入记录</p>
       </section>
     </main>
@@ -124,6 +126,7 @@
 
       <section>
         <h2>各股票收益</h2>
+        <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr><th>代码</th><th class="num">持仓</th><th class="num">均价</th><th class="num">现价</th>
@@ -131,24 +134,29 @@
           </thead>
           <tbody id="returnsRows"></tbody>
         </table>
+        </div>
         <p id="returnsEmpty" class="hint" hidden>还没有任何买入记录</p>
       </section>
 
       <div class="two-col">
         <section>
           <h2>每月收益</h2>
+          <div class="table-scroll">
           <table class="data-table">
             <thead><tr><th>月份</th><th class="num">已实现 $</th><th class="num">笔数</th><th class="num">胜率</th></tr></thead>
             <tbody id="monthlyRows"></tbody>
           </table>
+          </div>
           <p id="monthlyEmpty" class="hint" hidden>还没有卖出记录</p>
         </section>
         <section>
           <h2>每周收益</h2>
+          <div class="table-scroll">
           <table class="data-table">
             <thead><tr><th>周</th><th class="num">已实现 $</th><th class="num">笔数</th><th class="num">胜率</th></tr></thead>
             <tbody id="weeklyRows"></tbody>
           </table>
+          </div>
           <p id="weeklyEmpty" class="hint" hidden>还没有卖出记录</p>
         </section>
       </div>
@@ -164,6 +172,7 @@
           <input id="recFilter" class="rec-filter" placeholder="按代码筛选，如 AAPL">
         </div>
         <p class="hint">编辑或删除记录后，盈亏与周/月统计会自动重新计算。</p>
+        <div class="table-scroll">
         <table class="data-table">
           <thead>
             <tr><th>代码</th><th>方向</th><th class="num">数量</th><th class="num">买入价</th><th>买入时间</th>
@@ -171,6 +180,7 @@
           </thead>
           <tbody id="recordRows"></tbody>
         </table>
+        </div>
         <p id="recordEmpty" class="hint" hidden>还没有记录</p>
       </section>
     </div>
